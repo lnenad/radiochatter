@@ -528,8 +528,11 @@ Automated tagged releases use a prebuilt payload because GitHub-hosted runners c
 
 ```powershell
 .\tools\new_release_tag.ps1 -Version 0.1.0 -GameDir "D:\SteamLibrary\steamapps\common\Nuclear Option\"
-git push origin HEAD v0.1.0
+git push origin HEAD
+git push origin v0.1.0
 ```
+
+Push the branch and the tag separately: pushing both refs in one command can make GitHub drop the tag push event, and the release workflow never triggers. If a tag was already pushed without triggering a run, either re-push it (`git push origin :refs/tags/v0.1.0 && git push origin v0.1.0`) or run the **Release** workflow manually from the Actions tab with the tag name.
 
 That script builds the DLL locally, copies `RadioChatter.dll` plus sidecar files into `release/payload`, commits that payload, and creates the annotated tag. The GitHub Actions workflow then packages the Windows installer `.exe` and Linux zip from `release/payload` without needing game files on the runner.
 

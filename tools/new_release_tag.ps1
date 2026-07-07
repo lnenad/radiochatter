@@ -61,7 +61,9 @@ try {
     git -C $root tag -a $tag -m "RadioChatter $tag"
     if ($LASTEXITCODE -ne 0) { throw "Tag failed" }
 
-    Write-Host "Created $tag. Push with: git push origin HEAD $tag"
+    # Push the branch and the tag as two separate pushes: pushing them together in
+    # one command can make GitHub skip the tag push event, so Actions never triggers.
+    Write-Host "Created $tag. Push with: git push origin HEAD; git push origin $tag"
 }
 finally {
     Pop-Location
