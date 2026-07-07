@@ -1,0 +1,8 @@
+{
+  "default": "eve",
+  "eve": "eve",
+  "tower": "eve",
+  "awacs": "vera",
+  "player": "george",
+  "wingman": "paul"
+}

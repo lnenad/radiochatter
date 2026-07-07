@@ -1,0 +1,53 @@
+{
+  "tower_takeoff": [
+    "{callsign}, cleared for takeoff{runway}",
+    "{callsign}, tower, cleared for takeoff{runway}"
+  ],
+  "tower_airborne": [
+    "{callsign}, airborne, contact {awacs} on button two",
+    "{callsign}, tower, radar contact, switch {awacs}"
+  ],
+  "tower_approach": [
+    "{callsign}, report ready for approach",
+    "{callsign}, tower, continue inbound, report approach"
+  ],
+  "tower_final": [
+    "{callsign}, cleared to land{runway}",
+    "{callsign}, tower, wind calm, cleared to land{runway}"
+  ],
+  "tower_landed": [
+    "{callsign}, welcome home, taxi to ramp",
+    "{callsign}, tower, welcome home"
+  ],
+  "awacs_new_contact": [
+    "{callsign}, {awacs}, new contact{bearing_clause}, range {range}{altitude_clause}, {aspect}"
+  ],
+  "awacs_missile": [
+    "defend, defend, missile inbound bearing {bearing}",
+    "{callsign}, missile inbound, defend, bearing {bearing}"
+  ],
+  "awacs_splash_air": [
+    "splash one, {type} down",
+    "{callsign}, {awacs}, splash, {type} destroyed"
+  ],
+  "awacs_splash_ground": [
+    "good effect on target, {type} destroyed",
+    "{callsign}, {awacs}, target destroyed, good effect"
+  ],
+  "awacs_rtb_fuel": [
+    "{callsign}, {awacs}, bingo fuel, return to base",
+    "{callsign}, {awacs}, fuel state bingo, proceed home plate"
+  ],
+  "awacs_rtb_vector": [
+    "{callsign}, {awacs}, continue RTB, home plate bearing {bearing}, range {range}",
+    "{callsign}, {awacs}, home plate bearing {bearing}, range {range}, continue inbound"
+  ],
+  "awacs_vector": [
+    "{callsign}, {awacs}, target{bearing_clause}, range {range}{altitude_clause}",
+    "{callsign}, vector to target{bearing_clause}, range {range}{altitude_clause}"
+  ],
+  "awacs_picture": [
+    "{callsign}, {awacs}, nearest contact{bearing_clause}, range {range}{altitude_clause}, {aspect}",
+    "{callsign}, {awacs}, picture, single group{bearing_clause}, range {range}{altitude_clause}, {aspect}"
+  ]
+}

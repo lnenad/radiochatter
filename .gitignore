@@ -1,0 +1,12 @@
+bin/
+obj/
+Local.props
+*.user
+sidecar/voices/
+sidecar/__pycache__/
+sidecar/.venv/
+sidecar/cache/
+sidecar/*.log
+.venv-sidecar*/
+*.wav
+sidecar.*.log
