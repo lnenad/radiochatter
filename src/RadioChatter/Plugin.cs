@@ -122,7 +122,7 @@ namespace RadioChatter
             DebugOverlay = f.Bind("General", "DebugOverlay", false, "Show live game-state debug overlay (Phase 1 verification).");
 
             SidecarUrl = f.Bind("Sidecar", "Url", "http://127.0.0.1:5075", "Base URL of the Pocket TTS sidecar.");
-            AutoStartSidecar = f.Bind("Sidecar", "AutoStartSidecar", false, "Launch the Pocket TTS sidecar automatically if /health is down.");
+            AutoStartSidecar = f.Bind("Sidecar", "AutoStartSidecar", true, "Launch the Pocket TTS sidecar automatically if /health is down.");
             SidecarCommand = f.Bind("Sidecar", "SidecarCommand", "", "Path to a sidecar launcher script used when AutoStartSidecar is on. Empty tries sidecar/run_sidecar.bat or sidecar/run_sidecar.sh next to the plugin.");
             CacheSize = f.Bind("Sidecar", "CacheSize", 100, "Max synthesized clips kept in the LRU cache.");
 

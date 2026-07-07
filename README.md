@@ -30,6 +30,11 @@ repo-root/
 +-- build.sh
 +-- PROJECT.md
 +-- README.md
++-- packaging/
++|   +-- thunderstore/README.md
++-- installer/
++|   +-- linux/install-radiochatter.sh
++|   +-- windows/RadioChatterInstaller.iss
 +-- plan/
 |   +-- GameApi.md
 |   +-- tools/dump-api.ps1
@@ -60,6 +65,9 @@ repo-root/
         +-- NumberSpeech.cs      # numbers -> spoken words
         +-- PocketTtsClient.cs   # sidecar HTTP client, WAV parse, LRU cache
         +-- SidecarSupervisor.cs # health probes, auto-start, backoff
++-- tools/
+    +-- package_github_release.py  # builds GitHub release assets
+    +-- package_thunderstore.py    # optional Thunderstore/r2modman zip
 ```
 
 ## Requirements
@@ -67,8 +75,8 @@ repo-root/
 - Nuclear Option installed locally.
 - BepInEx 5.x for Mono Unity installed into the Nuclear Option folder.
 - `.NET SDK` capable of building SDK-style projects.
-- Python 3.10+ for the sidecar.
-- Pocket TTS Python package and dependencies from `sidecar/requirements.txt`.
+- Python 3.10+ for the sidecar. The launchers create `sidecar/.venv` and install dependencies automatically when possible.
+- Pocket TTS Python package and dependencies from `sidecar/requirements.txt` if you install the sidecar manually.
 
 The project defaults to these game paths:
 
@@ -95,6 +103,30 @@ The deployed plugin path is:
 ```text
 <Nuclear Option>/BepInEx/plugins/RadioChatter/RadioChatter.dll
 ```
+
+## Install From GitHub Releases
+
+Download a release from:
+
+```text
+https://github.com/lnenad/radiochatter/releases
+```
+
+Windows:
+
+1. Close Nuclear Option.
+2. Run `RadioChatter-<version>-Setup.exe`.
+3. Select the Nuclear Option game folder.
+4. Leave `Prepare Pocket TTS sidecar now` checked if you want the installer to create the sidecar `.venv` immediately.
+
+Linux:
+
+```sh
+unzip RadioChatter-<version>-linux.zip
+sh install-radiochatter.sh --game-dir "$HOME/.steam/steam/steamapps/common/Nuclear Option" --yes
+```
+
+Both installers expect BepInEx 5 to already be installed in the game folder. The plugin auto-starts the sidecar by default. If the sidecar environment has not already been prepared, the launcher creates `BepInEx/plugins/RadioChatter/sidecar/.venv`, installs `sidecar/requirements.txt`, and downloads Pocket TTS model assets. That first startup can take several minutes and requires Python 3.10+.
 
 ## Build And Deploy
 
@@ -151,7 +183,7 @@ The sidecar exposes:
 
 ### Install Sidecar Dependencies
 
-From the repo root:
+The sidecar launchers install dependencies automatically into `sidecar/.venv` if no usable environment exists. To prepare the environment manually from the repo root:
 
 Windows:
 
@@ -169,7 +201,7 @@ python3 -m venv .venv-sidecar312
 ./.venv-sidecar312/bin/python -m pip install -r sidecar/requirements.txt
 ```
 
-The launchers also support a local `sidecar/.venv` if you prefer to create the venv inside the sidecar folder.
+The launchers prefer a local `sidecar/.venv`, then the repo-level `.venv-sidecar312`, then create `sidecar/.venv` from system Python if needed.
 
 ### Start The Sidecar
 
@@ -299,7 +331,7 @@ BepInEx writes config to:
 | Key | Default | Meaning |
 |---|---:|---|
 | `Url` | `http://127.0.0.1:5075` | Base URL for the Pocket TTS sidecar. |
-| `AutoStartSidecar` | `false` | If enabled, tries to launch the sidecar when `/health` is down. |
+| `AutoStartSidecar` | `true` | If enabled, tries to launch the sidecar when `/health` is down. |
 | `SidecarCommand` | empty | Path to a sidecar launcher script. |
 | `CacheSize` | `100` | Max synthesized clips kept in the in-memory TTS cache. |
 
@@ -479,6 +511,29 @@ dotnet build src\RadioChatter\RadioChatter.csproj -c Release -p:GameDir="D:\Stea
 ```sh
 dotnet build src/RadioChatter/RadioChatter.csproj -c Release -p:GameDir="$HOME/.steam/steam/steamapps/common/Nuclear Option"
 ```
+
+Build GitHub release assets:
+
+```powershell
+python tools\package_github_release.py --game-dir "D:\SteamLibrary\steamapps\common\Nuclear Option\"
+```
+
+```sh
+python3 tools/package_github_release.py --game-dir "$HOME/.steam/steam/steamapps/common/Nuclear Option"
+```
+
+The Linux asset is written to `dist/RadioChatter-<version>-linux.zip`. If Inno Setup 6 is installed, the Windows wizard is compiled to `dist/RadioChatter-<version>-Setup.exe`; otherwise the script stages the payload and prints the manual Inno compile step. Use `--skip-build` if the Release DLL is already current.
+
+Automated tagged releases use a prebuilt payload because GitHub-hosted runners cannot legally build against Nuclear Option game assemblies. Create release tags from a local machine with the game installed:
+
+```powershell
+.\tools\new_release_tag.ps1 -Version 0.1.0 -GameDir "D:\SteamLibrary\steamapps\common\Nuclear Option\"
+git push origin HEAD v0.1.0
+```
+
+That script builds the DLL locally, copies `RadioChatter.dll` plus sidecar files into `release/payload`, commits that payload, and creates the annotated tag. The GitHub Actions workflow then packages the Windows installer `.exe` and Linux zip from `release/payload` without needing game files on the runner.
+
+The old Thunderstore package helper is still available at `tools/package_thunderstore.py`, but the GitHub release installer/script path is the primary distribution flow.
 
 The C# project references game assemblies from:
 

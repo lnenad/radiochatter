@@ -68,8 +68,19 @@ parent-dir/
 │   ├── voices.json                # role -> Pocket TTS voice mapping
 │   ├── run_sidecar.bat
 │   └── run_sidecar.sh
+├── packaging/
+│   └── thunderstore/README.md     # Thunderstore package README
+├── installer/
+│   ├── linux/install-radiochatter.sh
+│   └── windows/RadioChatterInstaller.iss
 ├── build.ps1                      # build + copy DLL to game plugins dir
 ├── build.sh                       # Linux build + copy DLL to game plugins dir
+├── tools/
+│   ├── package_github_release.py  # GitHub release asset builder
+│   ├── new_release_tag.ps1        # local build + prebuilt payload + tag helper
+│   └── package_thunderstore.py    # optional Thunderstore/r2modman package builder
+├── .github/workflows/release.yml  # tag-triggered installer/zip release workflow
+├── release/payload/               # committed prebuilt DLL + sidecar for CI packaging
 └── README.md                      # install, config reference, troubleshooting
 ```
 
@@ -226,11 +237,11 @@ TTS backend: `kyutai-labs/pocket-tts` (`https://github.com/kyutai-labs/pocket-tt
 BepInEx config entries (all live-editable via ConfigurationManager):
 
 - `General`: `Enabled`, `PlayerCallsign` ("Falcon 1"), `AwacsCallsign` ("Overwatch"), `SubtitlesEnabled`, `PollIntervalSeconds` (0.5), `DebugOverlay` (false).
-- `Sidecar`: `Url` (`http://127.0.0.1:5075`), `AutoStartSidecar` (false), `SidecarCommand` (path to a sidecar launcher script), `CacheSize` (100).
+- `Sidecar`: `Url` (`http://127.0.0.1:5075`), `AutoStartSidecar` (true), `SidecarCommand` (path to a sidecar launcher script), `CacheSize` (100).
 - `Audio`: `Volume` (0.8), `RadioEffectEnabled` (true), `NoiseLevel`, `TowerVoice` ("eve"), `AwacsVoice` ("eve").
 - `Callouts` (each bool + cooldown float where relevant): `Takeoff`, `Landing`, `Approach`, `NewContact`, `PictureUpdate` + `PictureIntervalSeconds` (45), `VectorToTarget` + interval, `SplashCalls`, `MissileWarning`, `RtbCalls`.
 
-Polish tasks: README (install steps incl. BepInEx + sidecar + voice downloads, config reference, troubleshooting table), Thunderstore package layout (`manifest.json`, `icon.png`, README) as a stretch goal, version-tolerance note (rebuild instructions after game updates).
+Polish tasks: README (install steps incl. BepInEx + sidecar + voice downloads, config reference, troubleshooting table), maintain the GitHub release installer/script path, version-tolerance note (rebuild instructions after game updates).
 
 ---
 

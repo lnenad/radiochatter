@@ -8,5 +8,8 @@ sidecar/.venv/
 sidecar/cache/
 sidecar/*.log
 .venv-sidecar*/
+dist/
+!release/payload/
+!release/payload/**
 *.wav
 sidecar.*.log

@@ -1,0 +1,47 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    name: Build release assets
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Inno Setup
+        shell: powershell
+        run: choco install innosetup --no-progress -y
+
+      - name: Validate prebuilt payload
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          if (!(Test-Path release/payload/RadioChatter.dll)) { throw "release/payload/RadioChatter.dll is missing. Create tags with tools/new_release_tag.ps1." }
+          if (!(Test-Path release/payload/sidecar/server.py)) { throw "release/payload/sidecar/server.py is missing." }
+          if (!(Test-Path release/payload/sidecar/run_sidecar.bat)) { throw "release/payload/sidecar/run_sidecar.bat is missing." }
+          if (!(Test-Path release/payload/sidecar/run_sidecar.sh)) { throw "release/payload/sidecar/run_sidecar.sh is missing." }
+
+      - name: Build installers from prebuilt payload
+        shell: powershell
+        run: python tools/package_github_release.py --skip-build --payload-source release/payload --version "${{ github.ref_name }}"
+
+      - name: Upload GitHub release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/RadioChatter-*-Setup.exe
+            dist/RadioChatter-*-linux.zip
