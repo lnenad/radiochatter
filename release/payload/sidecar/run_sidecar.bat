@@ -120,12 +120,33 @@ call :find_uv
 if errorlevel 1 goto no_python
 
 :uv_venv
+rem Some Windows machines refuse to traverse the junction uv creates at
+rem cpython-3.12-windows-x86_64-none (os error 448, "untrusted mount point";
+rem seen with OneDrive Files On-Demand and Redirection Guard). Both uv's
+rem interpreter discovery and the venv's pyvenv.cfg "home" go through that
+rem junction, so we delete it and always use the fully-versioned install
+rem directory directly; uv then records the real path in the venv.
 call :remove_local_venv
 if errorlevel 1 exit /b %errorlevel%
 if not defined UV_PYTHON_INSTALL_DIR set "UV_PYTHON_INSTALL_DIR=%RC_UV_HOME%\python"
-echo Creating RadioChatter sidecar environment in "%~dp0.venv" (uv-managed Python 3.12)...
 echo uv managed Python directory: "%UV_PYTHON_INSTALL_DIR%"
-call :run_cmd "%UV_EXE%" venv --seed --python 3.12 "%~dp0.venv"
+call :find_uv_python
+if errorlevel 1 (
+    echo Installing uv-managed Python 3.12...
+    rem --no-bin/--no-registry keep uv from putting shims on the user's PATH
+    rem and in the Windows registry; this install is private to RadioChatter.
+    rem The install can exit nonzero just because the minor-version junction
+    rem could not be created; ignore the exit code and check whether the
+    rem interpreter actually landed on disk.
+    call :run_cmd "%UV_EXE%" python install 3.12 --no-bin --no-registry
+    call :find_uv_python
+    if errorlevel 1 (
+        echo uv could not provide a usable Python 3.12; falling back to the official Python installer.
+        goto bootstrap_private_python
+    )
+)
+echo Creating RadioChatter sidecar environment in "%~dp0.venv" (uv-managed Python at "!RC_UV_PYTHON_EXE!")...
+call :run_cmd "%UV_EXE%" venv --seed --python "!RC_UV_PYTHON_EXE!" "%~dp0.venv"
 if errorlevel 1 (
     echo uv failed to create the sidecar environment; falling back to the official Python installer.
     goto bootstrap_private_python
@@ -202,6 +223,19 @@ exit /b 1
 :check_bootstrap
 %* -c "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)" >nul 2>nul
 exit /b %errorlevel%
+
+:find_uv_python
+rem Delete the minor-version junction if present, then locate the
+rem fully-versioned CPython directory (e.g. cpython-3.12.11-windows-x86_64-none).
+rem rmdir without /s only removes a junction or an empty directory, so it can
+rem never delete a real install.
+rmdir "%UV_PYTHON_INSTALL_DIR%\cpython-3.12-windows-x86_64-none" >nul 2>nul
+set "RC_UV_PYTHON_EXE="
+for /d %%D in ("%UV_PYTHON_INSTALL_DIR%\cpython-3.12.*-windows-x86_64-none") do (
+    if exist "%%D\python.exe" set "RC_UV_PYTHON_EXE=%%D\python.exe"
+)
+if defined RC_UV_PYTHON_EXE exit /b 0
+exit /b 1
 
 :remove_local_venv
 if exist "%~dp0.venv" (
