@@ -2,8 +2,10 @@
 """RadioChatter Pocket TTS sidecar.
 
 HTTP contract:
-  GET  /health -> {"status":"ok","voices":[...]}
-  POST /speak  -> WAV bytes, JSON body {"text":"...", "voice":"awacs"}
+  GET  /health -> 200 {"status":"ok","voices":[...]} when ready
+                  503 {"status":"loading","phase":"downloading"|"loading"} while the model loads
+                  503 {"status":"error","error":"..."} when the model failed to load
+  POST /speak  -> WAV bytes, JSON body {"text":"...", "voice":"awacs"}; 503 while not ready
 """
 
 from __future__ import annotations
@@ -13,6 +15,8 @@ import io
 import json
 import os
 import sys
+import threading
+import time
 import wave
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -76,6 +80,45 @@ def _audio_to_wav_bytes(sample_rate: int, audio) -> bytes:
     return buf.getvalue()
 
 
+class EngineState:
+    """Shared load status the HTTP handlers report while the model loads in the background."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.engine: PocketTtsEngine | None = None
+        self.status = "loading"  # loading | ok | error
+        self.error = ""
+
+    def snapshot(self):
+        with self.lock:
+            return self.engine, self.status, self.error
+
+
+STATE = EngineState()
+
+
+def _cache_is_warm() -> bool:
+    """Best-effort guess whether the model still has to be downloaded.
+
+    A completed HuggingFace snapshot means we are loading from disk; missing
+    snapshots or *.incomplete blobs mean bytes are still coming over the wire.
+    """
+    try:
+        if os.environ.get("HF_HUB_OFFLINE") == "1":
+            return True
+        hf_home = Path(os.environ.get("HF_HOME", str(Path.home() / ".cache" / "huggingface")))
+        hub = hf_home / "hub"
+        if not hub.is_dir():
+            return False
+        if any(hub.rglob("*.incomplete")):
+            return False
+        for _ in hub.glob("models--*/snapshots/*/*"):
+            return True
+        return False
+    except OSError:
+        return False
+
+
 class PocketTtsEngine:
     def __init__(self, voices: Dict[str, str], language: str | None):
         try:
@@ -113,8 +156,6 @@ class PocketTtsEngine:
 
 
 class Handler(BaseHTTPRequestHandler):
-    engine: PocketTtsEngine
-
     server_version = "RadioChatterPocketTTS/0.1"
 
     def log_message(self, fmt, *args):
@@ -141,13 +182,26 @@ class Handler(BaseHTTPRequestHandler):
         if self.path != "/health":
             self.send_error(404)
             return
-        self._json(200, {"status": "ok", "voices": self.engine.voice_names})
+
+        engine, status, error = STATE.snapshot()
+        if engine is not None:
+            self._json(200, {"status": "ok", "voices": engine.voice_names})
+        elif status == "error":
+            self._json(503, {"status": "error", "error": error})
+        else:
+            phase = "loading" if _cache_is_warm() else "downloading"
+            self._json(503, {"status": "loading", "phase": phase})
 
     def do_POST(self):
         if self._reject_non_loopback():
             return
         if self.path != "/speak":
             self.send_error(404)
+            return
+
+        engine, status, error = STATE.snapshot()
+        if engine is None:
+            self._json(503, {"error": error or "voice model is not ready yet"})
             return
 
         try:
@@ -160,7 +214,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(400, {"error": "text is required"})
                 return
 
-            _, wav_bytes = self.engine.speak(text, voice)
+            _, wav_bytes = engine.speak(text, voice)
             self.send_response(200)
             self.send_header("Content-Type", "audio/wav")
             self.send_header("Content-Length", str(len(wav_bytes)))
@@ -170,21 +224,59 @@ class Handler(BaseHTTPRequestHandler):
             self._json(500, {"error": f"{type(exc).__name__}: {exc}"})
 
 
+def _force_hf_offline() -> None:
+    """Switch huggingface_hub to offline mode in-process.
+
+    The env var is read into huggingface_hub.constants at import time, so patch the
+    already-imported module too; re-exec is not an option once the port is bound.
+    """
+    os.environ["HF_HUB_OFFLINE"] = "1"
+    try:
+        from huggingface_hub import constants as hf_constants
+
+        hf_constants.HF_HUB_OFFLINE = True
+    except Exception:
+        pass
+
+
 def _create_engine(voices: Dict[str, str], language: str | None) -> PocketTtsEngine:
     """Load the engine, falling back to HF offline mode so a warm cache still boots
-    when huggingface.co is unreachable or a download stalls.
-
-    huggingface_hub reads HF_HUB_OFFLINE at import time, so the retry has to re-exec
-    the interpreter rather than just set the variable.
-    """
+    when huggingface.co is unreachable or a download stalls."""
     try:
         return PocketTtsEngine(voices, language)
     except Exception as exc:
         if os.environ.get("HF_HUB_OFFLINE") == "1":
             raise
         _log(f"Model load failed ({type(exc).__name__}: {exc}); retrying with HF_HUB_OFFLINE=1...")
-        os.environ["HF_HUB_OFFLINE"] = "1"
-        os.execve(sys.executable, [sys.executable] + sys.argv, os.environ)
+        _force_hf_offline()
+        return PocketTtsEngine(voices, language)
+
+
+def _load_engine_background(voices: Dict[str, str], language: str | None) -> None:
+    """Load the model on a background thread so /health can answer immediately.
+
+    Keeps retrying every 60s so a transient failure (no internet on first run)
+    recovers without a game restart."""
+    while True:
+        with STATE.lock:
+            STATE.status = "loading"
+        try:
+            engine = _create_engine(voices, language)
+        except Exception as exc:
+            message = f"{type(exc).__name__}: {exc}"
+            with STATE.lock:
+                STATE.status = "error"
+                STATE.error = message
+            _log(f"Model load failed: {message}; retrying in 60s...")
+            time.sleep(60)
+            continue
+
+        with STATE.lock:
+            STATE.engine = engine
+            STATE.status = "ok"
+            STATE.error = ""
+        _log(f"Loaded voices: {', '.join(engine.voice_names)}")
+        return
 
 
 def main() -> int:
@@ -201,12 +293,14 @@ def main() -> int:
     if "default" not in voices:
         voices["default"] = "eve"
 
-    _log("Loading Pocket TTS model and voices...")
-    Handler.engine = _create_engine(voices, args.language)
-    _log(f"Loaded voices: {', '.join(Handler.engine.voice_names)}")
-
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     _log(f"RadioChatter Pocket TTS sidecar listening on http://{args.host}:{args.port}")
+
+    _log("Loading Pocket TTS model and voices in the background...")
+    loader = threading.Thread(
+        target=_load_engine_background, args=(voices, args.language), name="model-loader", daemon=True
+    )
+    loader.start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:
