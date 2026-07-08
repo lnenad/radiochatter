@@ -130,6 +130,31 @@ A small status indicator in the bottom-right corner tracks voice readiness — *
 
 To install from source instead, see [Building from source](#building-from-source).
 
+## Uninstall
+
+Close Nuclear Option first. To remove the plugin, delete:
+
+```text
+<Nuclear Option>\BepInEx\plugins\RadioChatter
+```
+
+To remove saved RadioChatter settings as well, delete:
+
+```text
+<Nuclear Option>\BepInEx\config\com.lnenad.radiochatter.cfg
+```
+
+Do not delete `BepInEx` itself unless you want to remove BepInEx and other installed mods too.
+If the sidecar is still running, stop any `python.exe` that was launched from the
+`RadioChatter\sidecar` folder before deleting the plugin folder.
+
+On Windows, the launcher may also create per-user Python bootstrap files outside the game
+folder. These are safe to delete when RadioChatter is uninstalled:
+
+```text
+%LOCALAPPDATA%\RadioChatter
+```
+
 ## Configuration
 
 BepInEx writes the config to `<Nuclear Option>/BepInEx/config/com.lnenad.radiochatter.cfg`
@@ -411,6 +436,37 @@ Logs are written through BepInEx — look for messages prefixed with `RadioChatt
 `BepInEx/LogOutput.log` or the BepInEx console. The bottom-right voice status indicator
 (`SidecarStatusDisplay`) shows at a glance whether the TTS sidecar is starting, downloading
 its model, loading, unavailable, or ready.
+
+### Sidecar setup debugging
+
+Windows sidecar setup writes logs next to the launcher:
+
+```text
+<Nuclear Option>\BepInEx\plugins\RadioChatter\sidecar\sidecar-install.log
+<Nuclear Option>\BepInEx\plugins\RadioChatter\sidecar\sidecar-pip.log
+```
+
+`sidecar-install.log` is the top-level transcript: Python discovery, venv creation, uv
+bootstrap, and fallback installer steps. `sidecar-pip.log` is pip's detailed dependency log.
+At runtime, sidecar stdout/stderr may also be written to:
+
+```text
+<Nuclear Option>\BepInEx\plugins\RadioChatter\sidecar\sidecar.stdout.log
+<Nuclear Option>\BepInEx\plugins\RadioChatter\sidecar\sidecar.stderr.log
+```
+
+To retry setup manually on Windows, open `cmd.exe` in the sidecar folder and run:
+
+```bat
+run_sidecar.bat --install-only
+```
+
+The launcher accepts Python 3.10+ only. It tries an existing `sidecar\.venv`, then a
+repo-level `.venv-sidecar312`, then system Python, then uv-managed Python, then a private
+official Python install under `%LOCALAPPDATA%\RadioChatter\Python312`. If setup created a bad
+or partial venv, delete `sidecar\.venv` or rerun the launcher; it should repair invalid local
+venvs automatically. If deletion fails, close the game and stop any `python.exe` launched from
+the sidecar folder, then retry.
 
 ## Building from source
 
