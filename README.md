@@ -100,7 +100,9 @@ mod disables itself rather than read state it does not own.
 2. Close Nuclear Option and run the installer.
 3. Select your Nuclear Option game folder.
 4. Leave *Prepare Pocket TTS sidecar now* checked to set up the voice environment immediately
-   (needs internet for the first model download).
+   (needs internet for the first model download). If this step fails, check
+   `BepInEx\plugins\RadioChatter\sidecar\sidecar-install.log` and rerun
+   `BepInEx\plugins\RadioChatter\sidecar\run_sidecar.bat --install-only`.
 
 ### Linux
 
@@ -394,7 +396,7 @@ to `500 meters`, `500ft` to `500 feet`, `120m/s` to `120 meters per second`.
 | No audio, subtitles still appear | Sidecar is not running or `/health` failed. | Start `sidecar/run_sidecar.bat` or `sidecar/run_sidecar.sh` and check `http://127.0.0.1:5075/health`. |
 | No audio and no subtitles | Plugin disabled or not loaded. | Check `Enabled=true`, plugin DLL path, and BepInEx logs. |
 | Deploy fails with `user-mapped section open` | Nuclear Option has the DLL loaded. | Close the game before copying the DLL. |
-| Sidecar says `pocket-tts is not installed` | Python environment is missing dependencies. | Run `python -m pip install -r sidecar\requirements.txt` in the sidecar venv. |
+| Sidecar says `pocket-tts is not installed` | Python environment is missing dependencies or a previous install was interrupted. | Run `sidecar\run_sidecar.bat --install-only`; check `sidecar\sidecar-install.log` and `sidecar\sidecar-pip.log` if it fails. |
 | Sidecar starts slowly | Pocket TTS model is loading or downloading. | Wait for `RadioChatter Pocket TTS sidecar listening...`. |
 | Auto-started sidecar never comes online (python running, no CPU) | A stalled HuggingFace connection hung the model load. | The sidecar launchers set `HF_HUB_ETAG_TIMEOUT`/`HF_HUB_DOWNLOAD_TIMEOUT` and `server.py` retries with `HF_HUB_OFFLINE=1`, so this should self-recover; if a python process is stuck from an older version, stop it and start the sidecar again. |
 | Wrong voice for a role | Plugin voice alias and `voices.json` do not match. | Update `Audio.*Voice` config or `sidecar\voices.json`, then restart the sidecar. |
@@ -470,11 +472,17 @@ RadioChatter talks to a local HTTP sidecar at `http://127.0.0.1:5075`:
 - `POST /speak` accepts `{"text":"...", "voice":"..."}` and returns `audio/wav`.
 
 The launchers (`sidecar/run_sidecar.bat`, `sidecar/run_sidecar.sh`) install dependencies
-automatically into `sidecar/.venv` if no usable environment exists; they prefer a local
+automatically into `sidecar/.venv` if no usable environment exists; the Windows launcher also
+repairs an existing venv if `pocket-tts` or `numpy` is missing. They prefer a local
 `sidecar/.venv`, then a repo-level `.venv-sidecar312`, then create `sidecar/.venv` from system
 Python — and if no system Python exists, they download [uv](https://github.com/astral-sh/uv)
-and a standalone Python 3.12 into `sidecar/uv/`. To prepare the environment manually from the
-repo root:
+and use uv to install a managed Python 3.12 under `%LOCALAPPDATA%\RadioChatter\uv`.
+If uv cannot create the venv on the game drive, the Windows launcher falls back to the
+official Python 3.12 Windows installer and installs a private copy under
+`%LOCALAPPDATA%\RadioChatter\Python312`.
+Windows install attempts write
+`sidecar/sidecar-install.log` and pip details to `sidecar/sidecar-pip.log`. To prepare the
+environment manually from the repo root:
 
 ```powershell
 # Windows

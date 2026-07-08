@@ -98,7 +98,16 @@ def copy_sidecar(root: Path, target: Path, include_launchers: bool) -> None:
     for name in names:
         source = sidecar / name
         if source.exists():
-            shutil.copy2(source, target / name)
+            destination = target / name
+            if source.suffix.lower() == ".bat":
+                copy_batch_with_crlf(source, destination)
+            else:
+                shutil.copy2(source, destination)
+
+
+def copy_batch_with_crlf(source: Path, destination: Path) -> None:
+    text = source.read_text(encoding="utf-8")
+    destination.write_text(text.replace("\r\n", "\n").replace("\n", "\r\n"), encoding="utf-8", newline="")
 
 
 def stage_package(

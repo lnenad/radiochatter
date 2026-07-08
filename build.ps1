@@ -21,7 +21,14 @@ New-Item -ItemType Directory -Force $sidecarDir | Out-Null
 foreach ($name in @("server.py", "requirements.txt", "voices.json", "run_sidecar.bat", "run_sidecar.sh")) {
     $source = Join-Path $sidecarSrc $name
     if (Test-Path -LiteralPath $source) {
-        Copy-Item -LiteralPath $source -Destination $sidecarDir -Force
+        $destination = Join-Path $sidecarDir $name
+        if ($name.EndsWith(".bat")) {
+            $text = [System.IO.File]::ReadAllText($source)
+            $text = $text -replace "`r?`n", "`r`n"
+            [System.IO.File]::WriteAllText($destination, $text, [System.Text.UTF8Encoding]::new($false))
+        } else {
+            Copy-Item -LiteralPath $source -Destination $destination -Force
+        }
     }
 }
 

@@ -44,7 +44,15 @@ try {
     $sidecarDest = Join-Path $payload "sidecar"
     New-Item -ItemType Directory -Force -Path $sidecarDest | Out-Null
     foreach ($name in @("server.py", "requirements.txt", "voices.json", "run_sidecar.bat", "run_sidecar.sh")) {
-        Copy-Item -LiteralPath (Join-Path $sidecarSrc $name) -Destination $sidecarDest -Force
+        $source = Join-Path $sidecarSrc $name
+        $destination = Join-Path $sidecarDest $name
+        if ($name.EndsWith(".bat")) {
+            $text = [System.IO.File]::ReadAllText($source)
+            $text = $text -replace "`r?`n", "`r`n"
+            [System.IO.File]::WriteAllText($destination, $text, [System.Text.UTF8Encoding]::new($false))
+        } else {
+            Copy-Item -LiteralPath $source -Destination $destination -Force
+        }
     }
 
     if ($NoCommit) {

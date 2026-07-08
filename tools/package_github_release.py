@@ -48,7 +48,18 @@ def copy_sidecar(root: Path, target: Path) -> None:
     sidecar = root / "sidecar"
     target.mkdir(parents=True, exist_ok=True)
     for name in ("server.py", "requirements.txt", "voices.json", "run_sidecar.bat", "run_sidecar.sh"):
-        shutil.copy2(sidecar / name, target / name)
+        source = sidecar / name
+        destination = target / name
+        if source.suffix.lower() == ".bat":
+            copy_batch_with_crlf(source, destination)
+        else:
+            shutil.copy2(source, destination)
+
+
+def copy_batch_with_crlf(source: Path, destination: Path) -> None:
+    """cmd.exe can fail to find labels in LF-only batch files after CALL/GOTO."""
+    text = source.read_text(encoding="utf-8")
+    destination.write_text(text.replace("\r\n", "\n").replace("\n", "\r\n"), encoding="utf-8", newline="")
 
 
 def stage_payload_from_build(root: Path, stage: Path, configuration: str) -> None:
@@ -74,6 +85,13 @@ def stage_payload_from_source(source: Path, stage: Path) -> None:
     if stage.exists():
         shutil.rmtree(stage)
     shutil.copytree(source, stage)
+    normalize_windows_batch_files(stage)
+
+
+def normalize_windows_batch_files(root: Path) -> None:
+    for path in root.rglob("*.bat"):
+        text = path.read_text(encoding="utf-8")
+        path.write_text(text.replace("\r\n", "\n").replace("\n", "\r\n"), encoding="utf-8", newline="")
 
 
 def make_linux_zip(root: Path, payload: Path, output_zip: Path) -> None:

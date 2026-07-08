@@ -36,7 +36,7 @@ Source: "{#PayloadDir}\RadioChatter.dll"; DestDir: "{app}\BepInEx\plugins\RadioC
 Source: "{#PayloadDir}\sidecar\*"; DestDir: "{app}\BepInEx\plugins\RadioChatter\sidecar"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Run]
-Filename: "{app}\BepInEx\plugins\RadioChatter\sidecar\run_sidecar.bat"; Parameters: "--install-only"; WorkingDir: "{app}\BepInEx\plugins\RadioChatter\sidecar"; Description: "Prepare Pocket TTS sidecar"; Flags: postinstall runascurrentuser skipifsilent; Tasks: prepare_sidecar
+Filename: "{cmd}"; Parameters: "/C """"{app}\BepInEx\plugins\RadioChatter\sidecar\run_sidecar.bat"" --install-only"""; WorkingDir: "{app}\BepInEx\plugins\RadioChatter\sidecar"; Description: "Prepare Pocket TTS sidecar"; StatusMsg: "Preparing Pocket TTS sidecar. This can take several minutes on first install..."; Flags: postinstall runascurrentuser skipifsilent waituntilterminated; Tasks: prepare_sidecar
 
 [Code]
 function FirstExistingDir(Path1: string; Path2: string; Path3: string): string;
