@@ -12,7 +12,6 @@ namespace RadioChatter
         private static ManualLogSource _log;
 
         public static bool Ready => _poller != null;
-        public static bool DebugOverlayEnabled => _config != null && _config.DebugOverlay.Value;
 
         public static void Initialize(StatePoller poller, RadioAudioPlayer output, Config config, ManualLogSource log)
         {
@@ -26,11 +25,6 @@ namespace RadioChatter
         {
             _poller?.Tick();
             _output?.Tick();
-        }
-
-        public static string DebugText()
-        {
-            return _poller != null ? _poller.DebugText() : "RadioChatter runtime unavailable";
         }
 
         public static void LogInfoOnce(ref bool flag, string message)
@@ -49,7 +43,6 @@ namespace RadioChatter
             _output = null;
             _config = null;
             _log = null;
-            Game.RadioHudOverlay.Reset();
         }
     }
 }

@@ -12,7 +12,6 @@ not pre-recorded WAVs.
 [![Release pipeline](https://github.com/lnenad/radiochatter/actions/workflows/release.yml/badge.svg)](https://github.com/lnenad/radiochatter/actions/workflows/release.yml)
 ![BepInEx 5](https://img.shields.io/badge/BepInEx-5.x-green)
 ![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20Linux-blue)
-
 </div>
 
 ```text
@@ -22,6 +21,14 @@ not pre-recorded WAVs.
 [PLAYER]  Fox three!
 [AWACS]   Splash one. Good kill, Falcon 1-1.
 ```
+
+<div align="center">
+
+[![Demo video](https://img.youtube.com/vi/vPVlV0bkfTQ/hqdefault.jpg)](https://www.youtube.com/watch?v=vPVlV0bkfTQ)
+
+*▶ Click for a demo video*
+
+</div>
 
 RadioChatter is a [BepInEx 5](https://github.com/BepInEx/BepInEx) mod that watches live game
 state and generates spoken radio traffic through a local
@@ -111,6 +118,11 @@ Python dependencies, and downloads the Pocket TTS model — the first startup ca
 minutes. Subsequent startups take a few seconds. Until the sidecar is up, the mod shows
 subtitles only.
 
+A small status indicator in the bottom-right corner tracks voice readiness — *connecting*,
+*loading TTS model*, *unavailable*, or *ready* (which disappears after a few seconds):
+
+![Sidecar status indicator showing "Radio voice: loading TTS model..."](status-screenshot.png)
+
 To install from source instead, see [Building from source](#building-from-source).
 
 ## Configuration
@@ -129,7 +141,6 @@ the `Callouts` section to switch individual call types on or off.
 | `AwacsCallsign` | `Overwatch` | AWACS station callsign in generated phrases. |
 | `SubtitlesEnabled` | `true` | Shows bottom-center radio subtitles. |
 | `PollIntervalSeconds` | `0.5` | Game-state polling interval, clamped from `0.1` to `2`. |
-| `DebugOverlay` | `false` | Shows live player/contact/airbase state. |
 | `SidecarStatusDisplay` | `true` | Small bottom-right voice status indicator (connecting/loading/unavailable); the "ready" notice hides after a few seconds. |
 
 </details>
@@ -386,16 +397,15 @@ to `500 meters`, `500ft` to `500 feet`, `120m/s` to `120 meters per second`.
 | Wrong voice for a role | Plugin voice alias and `voices.json` do not match. | Update `Audio.*Voice` config or `sidecar\voices.json`, then restart the sidecar. |
 | Radio speaks raw keys like `awacs_rtb_fuel` | `phrases.json` failed to load, or a loose override is malformed or missing that key. | Check the BepInEx log for the phrase-bank error; fix or delete `BepInEx\plugins\RadioChatter\phrases.json`. |
 | Player weapon call is wrong | Weapon classification heuristic needs tuning for that Nuclear Option weapon. | Check the `Player weapon call:` log entry and update the mapping in `WeaponFirePatch`. |
-| New contact call when map looks empty | Contact filtering may need re-checking against game detection state. | Enable debug overlay and compare `Contacts:` count to the in-game map. |
+| New contact call when map looks empty | Contact filtering may need re-checking against game detection state. | Check the BepInEx log for the contact events and compare against the in-game map. |
 | Landing clearance repeats or fires wrong | The UI landing message parser matched an unexpected message. | Check BepInEx logs for `[Tower]` lines and capture the exact UI text. |
 | Inbound approach fires too early | Approach gate constants need tuning. | Current gate is 22 seconds of sustained closure and under 16 km before call. |
 | Multiplayer client produces no calls | Intended behavior. | RadioChatter is singleplayer/host only. |
 
-Logs are written through BepInEx — look for messages prefixed with `RadioChatter`. For live
-state, enable the debug overlay (`[General] DebugOverlay = true`); it shows game mode and
-mission state, player position/heading/speed/altitude/gear, the nearest friendly airbase and
-runway, the selected target's bearing/range, and counts for contacts, airbases, missiles, and
-tracked units.
+Logs are written through BepInEx — look for messages prefixed with `RadioChatter` in
+`BepInEx/LogOutput.log` or the BepInEx console. The bottom-right voice status indicator
+(`SidecarStatusDisplay`) shows at a glance whether the TTS sidecar is loading, unavailable,
+or ready.
 
 ## Building from source
 

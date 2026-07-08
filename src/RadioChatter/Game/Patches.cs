@@ -3,90 +3,9 @@ using System.Reflection;
 using HarmonyLib;
 using RadioChatter.Comms;
 using UnityEngine;
-using UnityEngine.UI;
 
 namespace RadioChatter.Game
 {
-    internal static class RadioHudOverlay
-    {
-        private static GameObject _root;
-        private static Text _text;
-        private static bool _createdLogged;
-
-        public static void Draw()
-        {
-            if (!RadioRuntime.Ready || !RadioRuntime.DebugOverlayEnabled)
-            {
-                if (_root != null)
-                    _root.SetActive(false);
-                return;
-            }
-
-            Ensure();
-            if (_root == null || _text == null)
-                return;
-
-            _root.SetActive(true);
-            _text.text = RadioRuntime.DebugText();
-        }
-
-        public static void Reset()
-        {
-            if (_root != null)
-                UnityEngine.Object.Destroy(_root);
-
-            _root = null;
-            _text = null;
-            _createdLogged = false;
-        }
-
-        private static void Ensure()
-        {
-            if (_root != null)
-                return;
-
-            _root = new GameObject("RadioChatter.DebugCanvas");
-            UnityEngine.Object.DontDestroyOnLoad(_root);
-
-            Canvas canvas = _root.AddComponent<Canvas>();
-            canvas.renderMode = RenderMode.ScreenSpaceOverlay;
-            canvas.sortingOrder = 32767;
-
-            _root.AddComponent<CanvasScaler>();
-            _root.AddComponent<GraphicRaycaster>();
-
-            GameObject panel = new GameObject("Panel");
-            panel.transform.SetParent(_root.transform, false);
-            Image image = panel.AddComponent<Image>();
-            image.color = new Color(0f, 0f, 0f, 0.78f);
-
-            RectTransform panelRect = panel.GetComponent<RectTransform>();
-            panelRect.anchorMin = new Vector2(0f, 1f);
-            panelRect.anchorMax = new Vector2(0f, 1f);
-            panelRect.pivot = new Vector2(0f, 1f);
-            panelRect.anchoredPosition = new Vector2(20f, -20f);
-            panelRect.sizeDelta = new Vector2(620f, 240f);
-
-            GameObject textObject = new GameObject("Text");
-            textObject.transform.SetParent(panel.transform, false);
-            _text = textObject.AddComponent<Text>();
-            _text.font = Resources.GetBuiltinResource<Font>("Arial.ttf");
-            _text.fontSize = 16;
-            _text.alignment = TextAnchor.UpperLeft;
-            _text.color = Color.white;
-            _text.horizontalOverflow = HorizontalWrapMode.Overflow;
-            _text.verticalOverflow = VerticalWrapMode.Overflow;
-
-            RectTransform textRect = textObject.GetComponent<RectTransform>();
-            textRect.anchorMin = Vector2.zero;
-            textRect.anchorMax = Vector2.one;
-            textRect.offsetMin = new Vector2(12f, 10f);
-            textRect.offsetMax = new Vector2(-12f, -10f);
-
-            RadioRuntime.LogInfoOnce(ref _createdLogged, "FlightHud-driven debug overlay created.");
-        }
-    }
-
     [HarmonyPatch(typeof(global::FlightHud), "Update")]
     internal static class FlightHudUpdatePatch
     {
@@ -96,7 +15,6 @@ namespace RadioChatter.Game
         {
             RadioRuntime.LogInfoOnce(ref _logged, "FlightHud.Update patch active.");
             RadioRuntime.Tick();
-            RadioHudOverlay.Draw();
         }
     }
 

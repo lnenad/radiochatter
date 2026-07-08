@@ -40,7 +40,7 @@ namespace RadioChatter
             RadioRuntime.Initialize(_poller, _output, Cfg, Log);
 
             Log.LogInfo($"{Name} {Version} loaded");
-            Log.LogInfo($"Config: Enabled={Cfg.Enabled.Value}, DebugOverlay={Cfg.DebugOverlay.Value}, SubtitlesEnabled={Cfg.SubtitlesEnabled.Value}");
+            Log.LogInfo($"Config: Enabled={Cfg.Enabled.Value}, SubtitlesEnabled={Cfg.SubtitlesEnabled.Value}");
         }
 
         private void Update()
@@ -74,7 +74,6 @@ namespace RadioChatter
         public readonly ConfigEntry<string> AwacsCallsign;
         public readonly ConfigEntry<bool> SubtitlesEnabled;
         public readonly ConfigEntry<float> PollIntervalSeconds;
-        public readonly ConfigEntry<bool> DebugOverlay;
         public readonly ConfigEntry<bool> SidecarStatusDisplay;
 
         // Sidecar
@@ -121,7 +120,6 @@ namespace RadioChatter
             SubtitlesEnabled = f.Bind("General", "SubtitlesEnabled", true, "Show callout text on screen.");
             PollIntervalSeconds = f.Bind("General", "PollIntervalSeconds", 0.5f,
                 new ConfigDescription("Game-state polling interval.", new AcceptableValueRange<float>(0.1f, 2f)));
-            DebugOverlay = f.Bind("General", "DebugOverlay", false, "Show live game-state debug overlay (Phase 1 verification).");
             SidecarStatusDisplay = f.Bind("General", "SidecarStatusDisplay", true, "Show a small radio-voice status indicator (connecting/loading/unavailable/ready) in the bottom-right corner. The ready notice hides after a few seconds.");
 
             SidecarUrl = f.Bind("Sidecar", "Url", "http://127.0.0.1:5075", "Base URL of the Pocket TTS sidecar.");
