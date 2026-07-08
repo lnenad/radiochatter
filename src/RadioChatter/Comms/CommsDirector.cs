@@ -34,6 +34,8 @@ namespace RadioChatter.Comms
         private const int MaxHeldStartupAwacsLines = 8;
         private const float StartupAwacsMaxHoldSeconds = 90f;
         private const float StartupStateGraceSeconds = 6f;
+        private const float NearAirbaseMinimumM = 1500f;
+        private const float NearAirbaseRadiusBufferM = 2500f;
         private const float RtbFuelBingoFraction = 0.18f;
         private const float RtbVectorMinDistanceM = 18000f;
         private const float RtbVectorMaxDistanceM = 90000f;
@@ -71,6 +73,7 @@ namespace RadioChatter.Comms
         private bool _approachAnnounced;
         private bool _finalAnnounced;
         private bool _landedAnnounced;
+        private bool _successfulAirportLanding;
         private bool _ejectionAnnounced;
         private bool _destroyedAudioStopped;
         private bool _startupWingmanDecisionMade;
@@ -203,6 +206,7 @@ namespace RadioChatter.Comms
                         break;
 
                     case RadioEventType.SortieSuccessful:
+                        _successfulAirportLanding = true;
                         if (_config.LandingCalls.Value && !_landedAnnounced)
                         {
                             _landedAnnounced = true;
@@ -320,9 +324,32 @@ namespace RadioChatter.Comms
                 return;
 
             _ejectionAnnounced = true;
+
+            if (IsNormalAirportExitEjection(snapshot))
+            {
+                _log.LogDebug("Suppressing player ejection mayday for normal airport exit.");
+                return;
+            }
+
             _queue.Clear();
             _output.TransmitImmediate(RadioRole.Player, RadioEventType.PlayerEjectionCall, "mayday! mayday! ejecting!", 3f);
             _log.LogInfo("[Player] mayday! mayday! ejecting!");
+        }
+
+        private bool IsNormalAirportExitEjection(Snapshot snapshot)
+        {
+            if (snapshot.Player.Destroyed)
+                return false;
+
+            bool safelyOnGround = snapshot.Player.Grounded ||
+                                  (_successfulAirportLanding && snapshot.Player.AltitudeAglM < 5f && snapshot.Player.SpeedMs < 45f);
+            if (!safelyOnGround)
+                return false;
+
+            if (!TryGetHomeBase(snapshot, out AirbaseInfo home, out float distanceM))
+                return false;
+
+            return IsNearAirbase(home, distanceM);
         }
 
         private bool DetectPlayerDestroyed(Snapshot snapshot)
@@ -420,7 +447,7 @@ namespace RadioChatter.Comms
             if (!TryGetHomeBase(snapshot, out AirbaseInfo home, out float distanceM))
                 return false;
 
-            bool nearBase = distanceM <= Mathf.Max(1500f, home.RadiusM + 2500f);
+            bool nearBase = IsNearAirbase(home, distanceM);
             if (!nearBase)
                 return false;
 
@@ -603,7 +630,7 @@ namespace RadioChatter.Comms
             if (!TryGetHomeBase(snapshot, out AirbaseInfo home, out float distanceM))
                 return;
 
-            bool nearBase = distanceM <= Mathf.Max(1500f, home.RadiusM + 2500f);
+            bool nearBase = IsNearAirbase(home, distanceM);
 
             if (snapshot.Player.Grounded)
             {
@@ -644,6 +671,7 @@ namespace RadioChatter.Comms
             {
                 bool wasGrounded = _stableGrounded == true;
                 _stableGrounded = false;
+                _successfulAirportLanding = false;
 
                 if (wasGrounded && nearBase && _config.TakeoffCalls.Value && !_airborneAnnounced)
                 {
@@ -1142,6 +1170,11 @@ namespace RadioChatter.Comms
             return false;
         }
 
+        private static bool IsNearAirbase(AirbaseInfo home, float distanceM)
+        {
+            return distanceM <= Mathf.Max(NearAirbaseMinimumM, home.RadiusM + NearAirbaseRadiusBufferM);
+        }
+
         private static bool IsPointedAt(GPos origin, float headingDeg, GPos target, float toleranceDeg)
         {
             return AbsDelta(headingDeg, GPos.Bearing(origin, target)) <= toleranceDeg;
@@ -1174,6 +1207,7 @@ namespace RadioChatter.Comms
             _approachAnnounced = false;
             _finalAnnounced = false;
             _landedAnnounced = false;
+            _successfulAirportLanding = false;
             _ejectionAnnounced = false;
             _destroyedAudioStopped = false;
             _startupWingmanDecisionMade = false;

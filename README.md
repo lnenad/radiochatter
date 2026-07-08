@@ -377,9 +377,11 @@ Incoming missile events also add a pilot defensive call on the player channel:
 `missile, break`.
 
 Player ejection is detected from the local aircraft ejected state and interrupts current
-chatter so the pilot call plays immediately: `mayday! mayday! ejecting!`. If the local
-aircraft is destroyed without an ejection, active and queued chatter is interrupted and AWACS
-calls the aircraft down, e.g. `Darkstar, Broadsword 1-1 is down, no chute`.
+chatter so the pilot call plays immediately: `mayday! mayday! ejecting!`. This mayday is
+suppressed when the player ejects from a non-destroyed aircraft safely on the ground at a
+friendly airbase, since that is the normal exit-aircraft mechanic. If the local aircraft is
+destroyed without an ejection, active and queued chatter is interrupted and AWACS calls the
+aircraft down, e.g. `Darkstar, Broadsword 1-1 is down, no chute`.
 
 If a weapon maps incorrectly, enable BepInEx debug logging and check the
 `Player weapon call:` log entry for the exact weapon display name.
@@ -591,7 +593,6 @@ plan/                        original design notes and game API dump tooling
 tools/
   new_release_tag.ps1        builds the DLL and stages/commits/tags a release payload
   package_github_release.py  builds GitHub release assets (installer .exe + linux zip)
-  package_thunderstore.py    optional Thunderstore/r2modman zip
 src/RadioChatter/
   Plugin.cs                  BepInEx entry point + config
   RadioRuntime.cs            static wiring between patches and services

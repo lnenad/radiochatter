@@ -68,8 +68,6 @@ parent-dir/
 │   ├── voices.json                # role -> Pocket TTS voice mapping
 │   ├── run_sidecar.bat
 │   └── run_sidecar.sh
-├── packaging/
-│   └── thunderstore/README.md     # Thunderstore package README
 ├── installer/
 │   ├── linux/install-radiochatter.sh
 │   └── windows/RadioChatterInstaller.iss
@@ -77,8 +75,7 @@ parent-dir/
 ├── build.sh                       # Linux build + copy DLL to game plugins dir
 ├── tools/
 │   ├── package_github_release.py  # GitHub release asset builder
-│   ├── new_release_tag.ps1        # local build + prebuilt payload + tag helper
-│   └── package_thunderstore.py    # optional Thunderstore/r2modman package builder
+│   └── new_release_tag.ps1        # local build + prebuilt payload + tag helper
 ├── .github/workflows/release.yml  # tag-triggered installer/zip release workflow
 ├── release/payload/               # committed prebuilt DLL + sidecar for CI packaging
 └── README.md                      # install, config reference, troubleshooting
