@@ -6,7 +6,7 @@
     <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
     <AssemblyName>RadioChatter</AssemblyName>
     <RootNamespace>RadioChatter</RootNamespace>
-    <Version>0.1.2</Version>
+    <Version>0.1.3</Version>
     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <DebugType>none</DebugType>
