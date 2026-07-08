@@ -80,6 +80,7 @@ namespace RadioChatter
         public readonly ConfigEntry<string> SidecarUrl;
         public readonly ConfigEntry<bool> AutoStartSidecar;
         public readonly ConfigEntry<string> SidecarCommand;
+        public readonly ConfigEntry<bool> StopSidecarOnExit;
         public readonly ConfigEntry<int> CacheSize;
 
         // Audio
@@ -124,6 +125,7 @@ namespace RadioChatter
             SidecarUrl = f.Bind("Sidecar", "Url", "http://127.0.0.1:5075", "Base URL of the Pocket TTS sidecar.");
             AutoStartSidecar = f.Bind("Sidecar", "AutoStartSidecar", true, "Launch the Pocket TTS sidecar automatically if /health is down.");
             SidecarCommand = f.Bind("Sidecar", "SidecarCommand", "", "Path to a sidecar launcher script used when AutoStartSidecar is on. Empty tries sidecar/run_sidecar.bat or sidecar/run_sidecar.sh next to the plugin.");
+            StopSidecarOnExit = f.Bind("Sidecar", "StopSidecarOnExit", true, "Stop the auto-started sidecar when the game exits. A sidecar you started manually is never touched.");
             CacheSize = f.Bind("Sidecar", "CacheSize", 100, "Max synthesized clips kept in the LRU cache.");
 
             Volume = f.Bind("Audio", "Volume", 0.8f,

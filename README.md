@@ -141,11 +141,13 @@ the `Callouts` section to switch individual call types on or off.
 | `Url` | `http://127.0.0.1:5075` | Base URL for the Pocket TTS sidecar. |
 | `AutoStartSidecar` | `true` | If enabled, tries to launch the sidecar when `/health` is down. |
 | `SidecarCommand` | empty | Path to a sidecar launcher script. |
+| `StopSidecarOnExit` | `true` | Stop the auto-started sidecar when the game exits. |
 | `CacheSize` | `100` | Max synthesized clips kept in the in-memory TTS cache. |
 
 If `AutoStartSidecar` is enabled, either set `SidecarCommand` to a launcher script, or keep
 the `sidecar` folder next to the plugin in `BepInEx/plugins/RadioChatter/sidecar` (the
-installers and build scripts put it there).
+installers and build scripts put it there). A sidecar the plugin started is stopped again
+when the game exits (`StopSidecarOnExit`); a sidecar you started manually is never touched.
 
 </details>
 

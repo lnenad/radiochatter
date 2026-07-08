@@ -98,7 +98,50 @@ namespace RadioChatter.Speech
                 _process = null;
             }
 
-            process?.Dispose();
+            if (process == null)
+                return;
+
+            if (_config.StopSidecarOnExit.Value)
+                StopProcessTree(process);
+
+            process.Dispose();
+        }
+
+        private void StopProcessTree(Process process)
+        {
+            try
+            {
+                if (process.HasExited)
+                    return;
+
+                if (IsUnixLike())
+                {
+                    // run_sidecar.sh execs the python server, so the launched process is
+                    // the server itself.
+                    process.Kill();
+                }
+                else
+                {
+                    // On Windows the launched process is a cmd.exe wrapper around python;
+                    // only a tree kill takes the server down with it.
+                    using (Process killer = Process.Start(new ProcessStartInfo
+                    {
+                        FileName = "taskkill",
+                        Arguments = $"/PID {process.Id} /T /F",
+                        UseShellExecute = false,
+                        CreateNoWindow = true
+                    }))
+                    {
+                        killer?.WaitForExit(3000);
+                    }
+                }
+
+                _log?.LogInfo("Stopped Pocket TTS sidecar with the game.");
+            }
+            catch (Exception ex)
+            {
+                _log?.LogWarning($"Failed to stop Pocket TTS sidecar: {ex.GetType().Name}: {ex.Message}");
+            }
         }
 
         private void ProbeSidecar()
