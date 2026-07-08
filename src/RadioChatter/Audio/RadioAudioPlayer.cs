@@ -407,7 +407,11 @@ namespace RadioChatter.Audio
             }
 
             while (_pendingSpeech.Count >= MaxPendingSpeech)
-                _pendingSpeech.Dequeue();
+            {
+                PendingSpeech dropped = _pendingSpeech.Dequeue();
+                if (_config != null && _config.SubtitlesEnabled.Value)
+                    AddSubtitle($"{PrefixForRole(dropped.Role)} {dropped.Text}", dropped.DisplaySeconds);
+            }
 
             _pendingSpeech.Enqueue(new PendingSpeech
             {
@@ -431,21 +435,32 @@ namespace RadioChatter.Audio
             if (_config == null || _client == null || _pendingSpeech.Count == 0)
                 return;
 
-            if (_sidecar != null && !_sidecar.CanRequestAudio)
-                return;
-
+            bool canRequest = _sidecar == null || _sidecar.CanRequestAudio;
             int count = _pendingSpeech.Count;
             float now = _clock;
             for (int i = 0; i < count; i++)
             {
                 PendingSpeech pending = _pendingSpeech.Dequeue();
                 if (pending.ExpiresAt < now)
+                {
+                    // A line that could not get audio in time must not vanish silently:
+                    // show its subtitle so the radio traffic still reaches the player.
+                    if (_config.SubtitlesEnabled.Value)
+                        AddSubtitle($"{PrefixForRole(pending.Role)} {pending.Text}", pending.DisplaySeconds);
+                    _log?.LogInfo($"Voice audio unavailable in time; showed subtitle only: {pending.Text}");
                     continue;
+                }
+
+                if (!canRequest)
+                {
+                    _pendingSpeech.Enqueue(pending);
+                    continue;
+                }
 
                 if (!TryStartAudioRequest(pending.Role, pending.Type, pending.Voice, pending.Text, pending.DisplaySeconds, pending.ExpiresAt))
                 {
                     _pendingSpeech.Enqueue(pending);
-                    return;
+                    canRequest = false; // stop issuing requests but keep sweeping expired lines
                 }
             }
         }

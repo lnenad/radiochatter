@@ -19,6 +19,29 @@ from pathlib import Path
 from typing import Dict, Tuple
 
 
+def _log(message: str) -> None:
+    """Write a log line without ever raising: logging must not take down the server."""
+    try:
+        sys.stdout.write(message + "\n")
+        sys.stdout.flush()
+    except (OSError, ValueError, AttributeError):
+        pass
+
+
+def _ensure_std_streams() -> None:
+    """Bind stdout/stderr to log files when the process has no console.
+
+    Launched from the game plugin (a GUI process) with CreateNoWindow, the
+    interpreter starts with sys.stdout/sys.stderr set to None; any direct
+    write would raise and kill the request handler mid-response.
+    """
+    base = Path(__file__).resolve().parent
+    if sys.stdout is None or sys.stdout.closed:
+        sys.stdout = (base / "sidecar.stdout.log").open("a", buffering=1, encoding="utf-8")
+    if sys.stderr is None or sys.stderr.closed:
+        sys.stderr = (base / "sidecar.stderr.log").open("a", buffering=1, encoding="utf-8")
+
+
 def _load_json(path: Path) -> Dict[str, str]:
     with path.open("r", encoding="utf-8") as handle:
         data = json.load(handle)
@@ -95,8 +118,7 @@ class Handler(BaseHTTPRequestHandler):
     server_version = "RadioChatterPocketTTS/0.1"
 
     def log_message(self, fmt, *args):
-        sys.stdout.write("%s - %s\n" % (self.address_string(), fmt % args))
-        sys.stdout.flush()
+        _log("%s - %s" % (self.address_string(), fmt % args))
 
     def _reject_non_loopback(self) -> bool:
         host = self.client_address[0]
@@ -160,10 +182,7 @@ def _create_engine(voices: Dict[str, str], language: str | None) -> PocketTtsEng
     except Exception as exc:
         if os.environ.get("HF_HUB_OFFLINE") == "1":
             raise
-        print(
-            f"Model load failed ({type(exc).__name__}: {exc}); retrying with HF_HUB_OFFLINE=1...",
-            flush=True,
-        )
+        _log(f"Model load failed ({type(exc).__name__}: {exc}); retrying with HF_HUB_OFFLINE=1...")
         os.environ["HF_HUB_OFFLINE"] = "1"
         os.execve(sys.executable, [sys.executable] + sys.argv, os.environ)
 
@@ -176,20 +195,22 @@ def main() -> int:
     parser.add_argument("--language", default="english")
     args = parser.parse_args()
 
+    _ensure_std_streams()
+
     voices = _load_json(Path(args.voices))
     if "default" not in voices:
         voices["default"] = "eve"
 
-    print("Loading Pocket TTS model and voices...", flush=True)
+    _log("Loading Pocket TTS model and voices...")
     Handler.engine = _create_engine(voices, args.language)
-    print(f"Loaded voices: {', '.join(Handler.engine.voice_names)}", flush=True)
+    _log(f"Loaded voices: {', '.join(Handler.engine.voice_names)}")
 
     server = ThreadingHTTPServer((args.host, args.port), Handler)
-    print(f"RadioChatter Pocket TTS sidecar listening on http://{args.host}:{args.port}", flush=True)
+    _log(f"RadioChatter Pocket TTS sidecar listening on http://{args.host}:{args.port}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
-        print("Stopping sidecar.", flush=True)
+        _log("Stopping sidecar.")
     finally:
         server.server_close()
     return 0
