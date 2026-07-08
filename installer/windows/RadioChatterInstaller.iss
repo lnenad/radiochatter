@@ -29,7 +29,7 @@ SetupLogging=yes
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
-Name: "prepare_sidecar"; Description: "Prepare Pocket TTS sidecar now (requires Python 3.10+ and internet)"; Flags: unchecked
+Name: "prepare_sidecar"; Description: "Prepare Pocket TTS sidecar now (requires internet; a private Python is downloaded automatically if none is installed)"; Flags: unchecked
 
 [Files]
 Source: "{#PayloadDir}\RadioChatter.dll"; DestDir: "{app}\BepInEx\plugins\RadioChatter"; Flags: ignoreversion

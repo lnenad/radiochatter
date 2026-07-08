@@ -88,8 +88,10 @@ mod disables itself rather than read state it does not own.
    HideGameManagerObject = true
    ```
 
-3. Python 3.10+ for the TTS sidecar (voice synthesis). Without it the mod still works in
-   subtitles-only mode.
+3. Internet access on first run — the sidecar downloads the Pocket TTS voice model
+   (~235 MB). Python is *not* required: if no Python 3.10+ is found, the launcher
+   automatically downloads [uv](https://github.com/astral-sh/uv) and a private,
+   self-contained Python 3.12 into the mod's own folder.
 
 ### Windows
 
@@ -119,7 +121,8 @@ minutes. Subsequent startups take a few seconds. Until the sidecar is up, the mo
 subtitles only.
 
 A small status indicator in the bottom-right corner tracks voice readiness — *connecting*,
-*loading TTS model*, *unavailable*, or *ready* (which disappears after a few seconds):
+*starting sidecar*, *downloading voice model* (first run only), *loading TTS model*,
+*unavailable*, or *ready* (which disappears after a few seconds):
 
 ![Sidecar status indicator showing "Radio voice: loading TTS model..."](status-screenshot.png)
 
@@ -141,7 +144,7 @@ the `Callouts` section to switch individual call types on or off.
 | `AwacsCallsign` | `Overwatch` | AWACS station callsign in generated phrases. |
 | `SubtitlesEnabled` | `true` | Shows bottom-center radio subtitles. |
 | `PollIntervalSeconds` | `0.5` | Game-state polling interval, clamped from `0.1` to `2`. |
-| `SidecarStatusDisplay` | `true` | Small bottom-right voice status indicator (connecting/loading/unavailable); the "ready" notice hides after a few seconds. |
+| `SidecarStatusDisplay` | `true` | Small bottom-right voice status indicator (connecting/starting/downloading/loading/unavailable); the "ready" notice hides after a few seconds. |
 
 </details>
 
@@ -404,8 +407,8 @@ to `500 meters`, `500ft` to `500 feet`, `120m/s` to `120 meters per second`.
 
 Logs are written through BepInEx — look for messages prefixed with `RadioChatter` in
 `BepInEx/LogOutput.log` or the BepInEx console. The bottom-right voice status indicator
-(`SidecarStatusDisplay`) shows at a glance whether the TTS sidecar is loading, unavailable,
-or ready.
+(`SidecarStatusDisplay`) shows at a glance whether the TTS sidecar is starting, downloading
+its model, loading, unavailable, or ready.
 
 ## Building from source
 
@@ -414,7 +417,7 @@ or ready.
 - Nuclear Option installed locally (the project references its game assemblies).
 - BepInEx 5.x (Mono) installed into the game folder.
 - A .NET SDK capable of building SDK-style projects.
-- Python 3.10+ for the sidecar.
+- Python 3.10+ for the sidecar (optional — the launcher bootstraps its own via uv if missing).
 
 The project defaults to these game paths:
 
@@ -469,7 +472,9 @@ RadioChatter talks to a local HTTP sidecar at `http://127.0.0.1:5075`:
 The launchers (`sidecar/run_sidecar.bat`, `sidecar/run_sidecar.sh`) install dependencies
 automatically into `sidecar/.venv` if no usable environment exists; they prefer a local
 `sidecar/.venv`, then a repo-level `.venv-sidecar312`, then create `sidecar/.venv` from system
-Python. To prepare the environment manually from the repo root:
+Python — and if no system Python exists, they download [uv](https://github.com/astral-sh/uv)
+and a standalone Python 3.12 into `sidecar/uv/`. To prepare the environment manually from the
+repo root:
 
 ```powershell
 # Windows

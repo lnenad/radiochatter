@@ -14,8 +14,19 @@ namespace RadioChatter.Speech
         {
             Unknown,
             Starting,
+            DownloadingModel,
+            LoadingModel,
             Available,
             Unavailable
+        }
+
+        private enum HealthProbe
+        {
+            Ready,
+            DownloadingModel,
+            LoadingModel,
+            Failed,
+            Unreachable
         }
 
         private readonly Config _config;
@@ -158,10 +169,20 @@ namespace RadioChatter.Speech
             try
             {
                 string error;
-                if (CheckHealth(out error))
+                switch (CheckHealth(out error))
                 {
-                    MarkAvailable();
-                    return;
+                    case HealthProbe.Ready:
+                        MarkAvailable();
+                        return;
+                    case HealthProbe.DownloadingModel:
+                        MarkLoading(SidecarStatus.DownloadingModel);
+                        return;
+                    case HealthProbe.LoadingModel:
+                        MarkLoading(SidecarStatus.LoadingModel);
+                        return;
+                    case HealthProbe.Failed:
+                        MarkFailed(error);
+                        return;
                 }
 
                 string launchError;
@@ -175,7 +196,7 @@ namespace RadioChatter.Speech
             }
         }
 
-        private bool CheckHealth(out string error)
+        private HealthProbe CheckHealth(out string error)
         {
             try
             {
@@ -191,24 +212,83 @@ namespace RadioChatter.Speech
                     if (response.StatusCode == HttpStatusCode.OK)
                     {
                         error = null;
-                        return true;
+                        return HealthProbe.Ready;
                     }
 
                     error = $"HTTP {(int)response.StatusCode}";
-                    return false;
+                    return HealthProbe.Unreachable;
                 }
             }
             catch (WebException ex)
             {
                 HttpWebResponse response = ex.Response as HttpWebResponse;
-                error = response != null ? $"HTTP {(int)response.StatusCode}" : ex.Message;
-                return false;
+                if (response == null)
+                {
+                    error = ex.Message;
+                    return HealthProbe.Unreachable;
+                }
+
+                // 503 with a JSON body is the sidecar itself reporting load progress.
+                string body = ReadBodySafe(response);
+                if ((int)response.StatusCode == 503 && body.Contains("\"loading\""))
+                {
+                    error = null;
+                    return body.Contains("\"downloading\"") ? HealthProbe.DownloadingModel : HealthProbe.LoadingModel;
+                }
+
+                if ((int)response.StatusCode == 503 && body.Contains("\"error\""))
+                {
+                    error = ExtractJsonField(body, "error") ?? "model failed to load";
+                    return HealthProbe.Failed;
+                }
+
+                error = $"HTTP {(int)response.StatusCode}";
+                return HealthProbe.Unreachable;
             }
             catch (Exception ex)
             {
                 error = $"{ex.GetType().Name}: {ex.Message}";
-                return false;
+                return HealthProbe.Unreachable;
             }
+        }
+
+        private static string ReadBodySafe(HttpWebResponse response)
+        {
+            try
+            {
+                using (Stream stream = response.GetResponseStream())
+                {
+                    if (stream == null)
+                        return string.Empty;
+
+                    using (StreamReader reader = new StreamReader(stream))
+                    {
+                        char[] buffer = new char[2048];
+                        int read = reader.Read(buffer, 0, buffer.Length);
+                        return read > 0 ? new string(buffer, 0, read) : string.Empty;
+                    }
+                }
+            }
+            catch
+            {
+                return string.Empty;
+            }
+        }
+
+        private static string ExtractJsonField(string body, string field)
+        {
+            // Tiny extractor for the sidecar's flat JSON; avoids a JSON dependency in net472.
+            string marker = "\"" + field + "\":";
+            int start = body.IndexOf(marker, StringComparison.Ordinal);
+            if (start < 0)
+                return null;
+
+            start = body.IndexOf('"', start + marker.Length);
+            if (start < 0)
+                return null;
+
+            int end = body.IndexOf('"', start + 1);
+            return end > start ? body.Substring(start + 1, end - start - 1) : null;
         }
 
         private bool TryLaunchSidecar(out string error)
@@ -277,6 +357,48 @@ namespace RadioChatter.Speech
 
             if (shouldLog)
                 _log?.LogInfo("Pocket TTS sidecar is available; voice audio enabled.");
+        }
+
+        private void MarkLoading(SidecarStatus status)
+        {
+            bool shouldLog;
+            DateTime now = DateTime.UtcNow;
+            lock (_gate)
+            {
+                if (_disposed)
+                    return;
+
+                shouldLog = _status != status;
+                _status = status;
+                _nextProbeUtc = now.AddSeconds(2);
+            }
+
+            if (shouldLog)
+                _log?.LogInfo(status == SidecarStatus.DownloadingModel
+                    ? "Pocket TTS sidecar is downloading the voice model (first run)..."
+                    : "Pocket TTS sidecar is loading the voice model...");
+        }
+
+        private void MarkFailed(string error)
+        {
+            bool shouldLog;
+            DateTime now = DateTime.UtcNow;
+            lock (_gate)
+            {
+                if (_disposed)
+                    return;
+
+                _status = SidecarStatus.Unavailable;
+                // The server is up but the model failed; it retries on its own, so
+                // keep probing without trying to launch another copy.
+                _nextProbeUtc = now.AddSeconds(10);
+                shouldLog = now >= _nextWarningLogUtc;
+                if (shouldLog)
+                    _nextWarningLogUtc = now.AddSeconds(60);
+            }
+
+            if (shouldLog)
+                _log?.LogWarning($"Pocket TTS sidecar reports a model load failure: {error}. It retries every 60s; continuing subtitles-only.");
         }
 
         private void MarkUnavailable(string healthError, bool launched, string launchError)

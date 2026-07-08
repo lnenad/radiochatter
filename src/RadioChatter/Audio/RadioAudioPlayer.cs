@@ -864,6 +864,12 @@ namespace RadioChatter.Audio
                     text = "Radio voice: ready";
                     break;
                 case SidecarSupervisor.SidecarStatus.Starting:
+                    text = "Radio voice: starting sidecar...";
+                    break;
+                case SidecarSupervisor.SidecarStatus.DownloadingModel:
+                    text = "Radio voice: downloading voice model (first run)...";
+                    break;
+                case SidecarSupervisor.SidecarStatus.LoadingModel:
                     text = "Radio voice: loading TTS model...";
                     break;
                 case SidecarSupervisor.SidecarStatus.Unavailable:

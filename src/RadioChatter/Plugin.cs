@@ -120,7 +120,7 @@ namespace RadioChatter
             SubtitlesEnabled = f.Bind("General", "SubtitlesEnabled", true, "Show callout text on screen.");
             PollIntervalSeconds = f.Bind("General", "PollIntervalSeconds", 0.5f,
                 new ConfigDescription("Game-state polling interval.", new AcceptableValueRange<float>(0.1f, 2f)));
-            SidecarStatusDisplay = f.Bind("General", "SidecarStatusDisplay", true, "Show a small radio-voice status indicator (connecting/loading/unavailable/ready) in the bottom-right corner. The ready notice hides after a few seconds.");
+            SidecarStatusDisplay = f.Bind("General", "SidecarStatusDisplay", true, "Show a small radio-voice status indicator (connecting/starting/downloading/loading/unavailable/ready) in the bottom-right corner. The ready notice hides after a few seconds.");
 
             SidecarUrl = f.Bind("Sidecar", "Url", "http://127.0.0.1:5075", "Base URL of the Pocket TTS sidecar.");
             AutoStartSidecar = f.Bind("Sidecar", "AutoStartSidecar", true, "Launch the Pocket TTS sidecar automatically if /health is down.");

@@ -6,6 +6,7 @@ sidecar/voices/
 sidecar/__pycache__/
 sidecar/.venv/
 sidecar/cache/
+sidecar/uv/
 sidecar/*.log
 .venv-sidecar*/
 dist/
