@@ -130,6 +130,7 @@ the `Callouts` section to switch individual call types on or off.
 | `SubtitlesEnabled` | `true` | Shows bottom-center radio subtitles. |
 | `PollIntervalSeconds` | `0.5` | Game-state polling interval, clamped from `0.1` to `2`. |
 | `DebugOverlay` | `false` | Shows live player/contact/airbase state. |
+| `SidecarStatusDisplay` | `true` | Small bottom-right voice status indicator (connecting/loading/unavailable); the "ready" notice hides after a few seconds. |
 
 </details>
 

@@ -10,7 +10,7 @@ namespace RadioChatter.Speech
 {
     internal sealed class SidecarSupervisor
     {
-        private enum SidecarStatus
+        public enum SidecarStatus
         {
             Unknown,
             Starting,
@@ -34,6 +34,15 @@ namespace RadioChatter.Speech
         {
             _config = config;
             _log = log;
+        }
+
+        public SidecarStatus Status
+        {
+            get
+            {
+                lock (_gate)
+                    return _status;
+            }
         }
 
         public bool CanRequestAudio

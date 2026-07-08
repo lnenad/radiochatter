@@ -75,6 +75,7 @@ namespace RadioChatter
         public readonly ConfigEntry<bool> SubtitlesEnabled;
         public readonly ConfigEntry<float> PollIntervalSeconds;
         public readonly ConfigEntry<bool> DebugOverlay;
+        public readonly ConfigEntry<bool> SidecarStatusDisplay;
 
         // Sidecar
         public readonly ConfigEntry<string> SidecarUrl;
@@ -121,6 +122,7 @@ namespace RadioChatter
             PollIntervalSeconds = f.Bind("General", "PollIntervalSeconds", 0.5f,
                 new ConfigDescription("Game-state polling interval.", new AcceptableValueRange<float>(0.1f, 2f)));
             DebugOverlay = f.Bind("General", "DebugOverlay", false, "Show live game-state debug overlay (Phase 1 verification).");
+            SidecarStatusDisplay = f.Bind("General", "SidecarStatusDisplay", true, "Show a small radio-voice status indicator (connecting/loading/unavailable/ready) in the bottom-right corner. The ready notice hides after a few seconds.");
 
             SidecarUrl = f.Bind("Sidecar", "Url", "http://127.0.0.1:5075", "Base URL of the Pocket TTS sidecar.");
             AutoStartSidecar = f.Bind("Sidecar", "AutoStartSidecar", true, "Launch the Pocket TTS sidecar automatically if /health is down.");

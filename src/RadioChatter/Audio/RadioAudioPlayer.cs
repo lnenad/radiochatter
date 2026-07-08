@@ -19,6 +19,7 @@ namespace RadioChatter.Audio
         private const float PendingSpeechSeconds = 45f;
         private const float ContactInfoLifetimeSeconds = 12f;
         private const float AcknowledgementDelaySeconds = 0.35f;
+        private const float ReadyBannerSeconds = 5f;
         private const int MaxPendingSpeech = 8;
         private const int MaxPendingAcknowledgements = 8;
         private const int MaxActiveSubtitles = 3;
@@ -56,6 +57,9 @@ namespace RadioChatter.Audio
         private int _audioGeneration;
         private bool _playbackLogged;
         private GUIStyle _style;
+        private GUIStyle _statusStyle;
+        private SidecarSupervisor.SidecarStatus _lastSidecarStatus = SidecarSupervisor.SidecarStatus.Unknown;
+        private float _sidecarReadyAt = float.NaN;
 
         public void Initialize(Config config, GameObject host, ManualLogSource log)
         {
@@ -805,7 +809,12 @@ namespace RadioChatter.Audio
 
         public void DrawGui()
         {
-            if (_config == null || !_config.SubtitlesEnabled.Value)
+            if (_config == null)
+                return;
+
+            DrawSidecarStatus();
+
+            if (!_config.SubtitlesEnabled.Value)
                 return;
 
             PruneSubtitles(_clock);
@@ -831,6 +840,54 @@ namespace RadioChatter.Audio
             Rect rect = new Rect((Screen.width - width) * 0.5f, Screen.height - height - 40f, width, height);
             GUI.Box(rect, GUIContent.none);
             GUI.Label(new Rect(rect.x + 12f, rect.y + 8f, labelWidth, rect.height - 16f), subtitle, _style);
+        }
+
+        private void DrawSidecarStatus()
+        {
+            if (_sidecar == null || !_config.SidecarStatusDisplay.Value)
+                return;
+
+            SidecarSupervisor.SidecarStatus status = _sidecar.Status;
+            if (status != _lastSidecarStatus)
+            {
+                if (status == SidecarSupervisor.SidecarStatus.Available)
+                    _sidecarReadyAt = _clock;
+                _lastSidecarStatus = status;
+            }
+
+            string text;
+            switch (status)
+            {
+                case SidecarSupervisor.SidecarStatus.Available:
+                    if (float.IsNaN(_sidecarReadyAt) || _clock - _sidecarReadyAt > ReadyBannerSeconds)
+                        return;
+                    text = "Radio voice: ready";
+                    break;
+                case SidecarSupervisor.SidecarStatus.Starting:
+                    text = "Radio voice: loading TTS model...";
+                    break;
+                case SidecarSupervisor.SidecarStatus.Unavailable:
+                    text = "Radio voice: sidecar unavailable - subtitles only";
+                    break;
+                default:
+                    text = "Radio voice: connecting to sidecar...";
+                    break;
+            }
+
+            if (_statusStyle == null)
+            {
+                _statusStyle = new GUIStyle(GUI.skin.label)
+                {
+                    alignment = TextAnchor.MiddleLeft,
+                    fontSize = 13
+                };
+                _statusStyle.normal.textColor = new Color(0.85f, 0.85f, 0.85f, 0.95f);
+            }
+
+            Vector2 size = _statusStyle.CalcSize(new GUIContent(text));
+            Rect rect = new Rect(Screen.width - size.x - 32f, Screen.height - 34f, size.x + 16f, 24f);
+            GUI.Box(rect, GUIContent.none);
+            GUI.Label(new Rect(rect.x + 8f, rect.y + 2f, size.x, 20f), text, _statusStyle);
         }
 
         private void AddSubtitle(string text, float displaySeconds)
