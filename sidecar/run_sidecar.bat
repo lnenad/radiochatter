@@ -31,15 +31,27 @@ if defined INSTALL_ONLY if not defined LOGGED_INSTALL (
     exit /b !RC_EXIT!
 )
 
-if not defined HF_HOME set "HF_HOME=%~dp0cache\huggingface"
-if not defined TORCH_HOME set "TORCH_HOME=%~dp0cache\torch"
-if not defined HF_HUB_DISABLE_SYMLINKS_WARNING set "HF_HUB_DISABLE_SYMLINKS_WARNING=1"
 if defined LOCALAPPDATA (
     set "RC_UV_HOME=%LOCALAPPDATA%\RadioChatter\uv"
     set "RC_PRIVATE_PYTHON_DIR=%LOCALAPPDATA%\RadioChatter\Python312"
+    set "RC_CACHE_HOME=%LOCALAPPDATA%\RadioChatter\cache"
 ) else (
     set "RC_UV_HOME=%~dp0uv"
     set "RC_PRIVATE_PYTHON_DIR=%~dp0python312"
+    set "RC_CACHE_HOME=%~dp0cache"
+)
+rem The HF hub layout nests model/snapshot/voice directories deep enough that on
+rem top of a Steam install path it exceeds Windows' 260-char MAX_PATH (WinError
+rem 206 mid-download), so the caches must live at a short path outside the game
+rem folder.
+if not defined HF_HOME set "HF_HOME=%RC_CACHE_HOME%\huggingface"
+if not defined TORCH_HOME set "TORCH_HOME=%RC_CACHE_HOME%\torch"
+if not defined HF_HUB_DISABLE_SYMLINKS_WARNING set "HF_HUB_DISABLE_SYMLINKS_WARNING=1"
+rem One-time migration from releases that kept the cache inside the game folder;
+rem robocopy copes with source paths beyond MAX_PATH where move/xcopy do not.
+if /I not "%RC_CACHE_HOME%"=="%~dp0cache" if exist "%~dp0cache\" (
+    echo Moving the model cache out of the game folder to "%RC_CACHE_HOME%"...
+    robocopy "%~dp0cache" "%RC_CACHE_HOME%" /E /MOVE /NFL /NDL /NJH /NJS >nul 2>nul
 )
 if not defined UV_CACHE_DIR set "UV_CACHE_DIR=%RC_UV_HOME%\cache"
 
