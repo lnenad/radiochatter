@@ -5,6 +5,7 @@ using HarmonyLib;
 using RadioChatter.Audio;
 using RadioChatter.Comms;
 using RadioChatter.Game;
+using RadioChatter.Speech;
 using UnityEngine;
 
 namespace RadioChatter
@@ -22,6 +23,7 @@ namespace RadioChatter
         private Harmony _harmony;
         private StatePoller _poller;
         private RadioAudioPlayer _output;
+        private VoiceCommandController _voice;
 
         private void Awake()
         {
@@ -37,7 +39,8 @@ namespace RadioChatter
             CommsDirector director = new CommsDirector(Cfg, _output, Log);
             _poller = new StatePoller();
             _poller.Initialize(new GameAdapter(), director, Cfg, Log);
-            RadioRuntime.Initialize(_poller, _output, Cfg, Log);
+            _voice = new VoiceCommandController(Cfg, Log);
+            RadioRuntime.Initialize(_poller, _output, _voice, Cfg, Log);
 
             Log.LogInfo($"{Name} {Version} loaded");
             Log.LogInfo($"Config: Enabled={Cfg.Enabled.Value}, SubtitlesEnabled={Cfg.SubtitlesEnabled.Value}");
@@ -51,6 +54,7 @@ namespace RadioChatter
         private void OnGUI()
         {
             _output?.DrawGui();
+            _voice?.DrawGui();
         }
 
         private void OnDestroy()
@@ -112,6 +116,20 @@ namespace RadioChatter
         public readonly ConfigEntry<bool> InGameComms;
         public readonly ConfigEntry<bool> RtbCalls;
 
+        // Voice commands
+        public readonly ConfigEntry<bool> VoiceCommandsEnabled;
+        public readonly ConfigEntry<bool> VoiceRequireProperCalls;
+        public readonly ConfigEntry<bool> VoiceRequestDriven;
+        public readonly ConfigEntry<KeyCode> VoicePushToTalkKey;
+        public readonly ConfigEntry<string> VoiceMicrophoneDevice;
+        public readonly ConfigEntry<float> VoiceMaxCommandSeconds;
+        public readonly ConfigEntry<bool> VoiceShowRecognizedText;
+
+        // Immersion
+        public readonly ConfigEntry<bool> HideObjectiveHudMarkers;
+        public readonly ConfigEntry<bool> HideAirbaseHudMarkers;
+        public readonly ConfigEntry<bool> HideMapObjectiveMarkers;
+
         public Config(ConfigFile f)
         {
             Enabled = f.Bind("General", "Enabled", true, "Master switch for all RadioChatter functionality.");
@@ -162,6 +180,28 @@ namespace RadioChatter
             PlayerAcknowledgements = f.Bind("Callouts", "PlayerAcknowledgements", true, "Short varied pilot acknowledgements after incoming radio calls finish.");
             InGameComms = f.Bind("Callouts", "InGameComms", true, "Read mission-scripted in-game comms, such as AI wingman radio messages.");
             RtbCalls = f.Bind("Callouts", "RtbCalls", true, "Low-fuel and sustained inbound return-to-base advisories.");
+
+            VoiceCommandsEnabled = f.Bind("VoiceCommands", "Enabled", true,
+                "Push-to-talk voice commands: request takeoff/landing clearance, AWACS picture, vectors, radio check. Needs a microphone; speech is transcribed locally by the sidecar.");
+            VoiceRequireProperCalls = f.Bind("VoiceCommands", "RequireProperCalls", true,
+                "Require proper radio format: station, callsign, request — e.g. \"Tower, Falcon 1-1, request takeoff\" or \"Overwatch, this is Falcon 1-1, request picture\". Improper calls get a corrective reply instead of an answer.");
+            VoiceRequestDriven = f.Bind("VoiceCommands", "RequestDriven", true,
+                "Comms are request-driven: tower clearances (takeoff, approach, landing) and AWACS picture/vector info must be requested by voice. AWACS still calls out new contacts, missile threats, splashes, and bingo fuel automatically. Off = everything is announced automatically, as before voice commands existed. Only applies while voice commands are enabled.");
+            VoicePushToTalkKey = f.Bind("VoiceCommands", "PushToTalkKey", KeyCode.RightAlt,
+                "Hold to record a voice command; release to send it.");
+            VoiceMicrophoneDevice = f.Bind("VoiceCommands", "MicrophoneDevice", "",
+                "Microphone device name. Empty uses the system default device.");
+            VoiceMaxCommandSeconds = f.Bind("VoiceCommands", "MaxCommandSeconds", 8f,
+                new ConfigDescription("Longest voice command that is recorded; the recording stops automatically after this.", new AcceptableValueRange<float>(2f, 20f)));
+            VoiceShowRecognizedText = f.Bind("VoiceCommands", "ShowRecognizedText", true,
+                "Show the recognized transcript as a [PILOT] subtitle before the station answers.");
+
+            HideObjectiveHudMarkers = f.Bind("Immersion", "HideObjectiveHudMarkers", false,
+                "Hide the floating objective pointer and label on the HUD. Pairs well with voice commands: ask AWACS for a vector to target instead.");
+            HideAirbaseHudMarkers = f.Bind("Immersion", "HideAirbaseHudMarkers", false,
+                "Hide the floating friendly-airbase marker and distance label on the HUD. Landing aids (runway borders, glideslope) still appear on final approach. Ask Tower or AWACS for a vector to home plate instead.");
+            HideMapObjectiveMarkers = f.Bind("Immersion", "HideMapObjectiveMarkers", false,
+                "Hide objective markers on the tactical map. The MFD objective list keeps working.");
         }
     }
 }

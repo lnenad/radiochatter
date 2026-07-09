@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Text;
 using BepInEx.Logging;
 using RadioChatter.Game;
 using RadioChatter.Speech;
@@ -27,6 +28,7 @@ namespace RadioChatter.Comms
         private const float VectorSuppressDistanceM = 4000f;
         private const float PlayerWeaponDuplicateSeconds = 1.5f;
         private const float PlayerGunsDuplicateSeconds = 5f;
+        private const float PlayerWeaponReleaseSeconds = 2f;
         private const float PlayerDefensiveDuplicateSeconds = 6f;
         private const float StartupWingmanHoldFallbackSeconds = 10f;
         private const float StartupWingmanTakeoffReadbackMaxHoldSeconds = 65f;
@@ -34,6 +36,7 @@ namespace RadioChatter.Comms
         private const int MaxHeldStartupAwacsLines = 8;
         private const float StartupAwacsMaxHoldSeconds = 90f;
         private const float StartupStateGraceSeconds = 6f;
+        private const float StartupMissionCommsGraceSeconds = 15f;
         private const float NearAirbaseMinimumM = 1500f;
         private const float NearAirbaseRadiusBufferM = 2500f;
         private const float RtbFuelBingoFraction = 0.18f;
@@ -45,6 +48,8 @@ namespace RadioChatter.Comms
         private const float RtbVectorMinClosingMeters = 20f;
         private const float RtbVectorCooldownSeconds = 90f;
         private const int MaxTransmissionsPerTick = 4;
+        private const int VoiceResponsePriority = 60;
+        private const float VoiceResponseDuplicateWindowSeconds = 2f;
 
         private readonly Config _config;
         private readonly IRadioOutput _output;
@@ -60,6 +65,9 @@ namespace RadioChatter.Comms
         private readonly Dictionary<string, float> _lastTextAt = new Dictionary<string, float>(64);
         private readonly Dictionary<RadioEventType, float> _lastTypeQueuedAt = new Dictionary<RadioEventType, float>();
         private readonly Dictionary<uint, ContactInfoRecord> _contactInfoLog = new Dictionary<uint, ContactInfoRecord>(64);
+        private readonly Dictionary<string, float> _heldPlayerWeaponCalls = new Dictionary<string, float>(8);
+        private readonly HashSet<string> _playerWeaponCallsSeenThisTick = new HashSet<string>();
+        private readonly List<string> _stalePlayerWeaponCalls = new List<string>(8);
         private readonly List<string> _startupWingmanTexts = new List<string>(MaxHeldStartupWingmanLines);
         private readonly List<PendingTransmission> _startupAwacsTransmissions = new List<PendingTransmission>(MaxHeldStartupAwacsLines);
 
@@ -83,6 +91,8 @@ namespace RadioChatter.Comms
         private bool _startupRadioGateActive;
         private bool _startupAwacsReleased;
         private float _startupRadioGateStartedAt = float.NaN;
+        private bool _startupMissionCommsSeen;
+        private float _startupTakeoffSequenceDoneAt = float.NaN;
         private bool _mpClientLogged;
         private float _previousHomeDistance = float.NaN;
         private float _approachInboundStartedAt = float.NaN;
@@ -93,6 +103,7 @@ namespace RadioChatter.Comms
         private float _rtbLastInboundAt = float.NaN;
         private float _nextSnapshotLogTime;
         private float _suppressPictureUntil;
+        private bool _sessionActive;
 
         public CommsDirector(Config config, IRadioOutput output, ManualLogSource log)
         {
@@ -104,10 +115,11 @@ namespace RadioChatter.Comms
 
         public void Tick(Snapshot snapshot)
         {
-            DrainPatchedEvents(snapshot);
-
             if (!_config.Enabled.Value)
+            {
+                EndSession();
                 return;
+            }
 
             if (snapshot.Mode == GameMode.MultiplayerClient)
             {
@@ -117,7 +129,7 @@ namespace RadioChatter.Comms
                     _log.LogInfo("RadioChatter disabled in multiplayer client mode.");
                 }
 
-                ResetSession();
+                EndSession();
                 return;
             }
 
@@ -125,9 +137,12 @@ namespace RadioChatter.Comms
 
             if (!snapshot.InMission || !snapshot.Player.Valid)
             {
-                ResetSession();
+                EndSession();
                 return;
             }
+
+            _sessionActive = true;
+            DrainPatchedEvents(snapshot);
 
             if (_aircraftInstanceId != snapshot.Player.AircraftInstanceId)
                 ResetForAircraft(snapshot.Player.AircraftInstanceId);
@@ -151,10 +166,23 @@ namespace RadioChatter.Comms
             ProcessQueue(snapshot.Time);
         }
 
+        private void EndSession()
+        {
+            bool stopOutput = _sessionActive;
+            _sessionActive = false;
+            RadioEventBus.Clear();
+            ResetSession();
+
+            if (stopOutput)
+                _output.StopAll();
+        }
+
         private void DrainPatchedEvents(Snapshot snapshot)
         {
             _patchedEvents.Clear();
+            _playerWeaponCallsSeenThisTick.Clear();
             RadioEventBus.Drain(_patchedEvents);
+            ReleaseStalePlayerWeaponCalls(snapshot.Time);
 
             for (int i = 0; i < _patchedEvents.Count; i++)
             {
@@ -215,7 +243,8 @@ namespace RadioChatter.Comms
                         break;
 
                     case RadioEventType.TowerFinal:
-                        if (_config.LandingCalls.Value && !_finalAnnounced && snapshot.InMission && snapshot.Player.Valid)
+                        if (_config.LandingCalls.Value && !_finalAnnounced && snapshot.InMission && snapshot.Player.Valid &&
+                            !RequestDrivenComms())
                         {
                             _finalAnnounced = true;
                             Queue(RadioRole.Tower, RadioEventType.TowerFinal, "tower_final",
@@ -229,6 +258,7 @@ namespace RadioChatter.Comms
                             string text = RadioText.SanitizeGameComms(evt.Text);
                             if (!string.IsNullOrEmpty(text))
                             {
+                                _startupMissionCommsSeen = true;
                                 if (ShouldHoldStartupWingman(snapshot))
                                 {
                                     _startupWingmanDecisionMade = true;
@@ -243,12 +273,24 @@ namespace RadioChatter.Comms
                         }
                         break;
 
+                    case RadioEventType.PlayerVoiceCommand:
+                        if (_config.Enabled.Value && _config.VoiceCommandsEnabled.Value &&
+                            snapshot.Mode != GameMode.MultiplayerClient &&
+                            snapshot.InMission && snapshot.Player.Valid)
+                        {
+                            HandleVoiceCommand(snapshot, evt.Text, now);
+                        }
+                        break;
+
                     case RadioEventType.PlayerWeaponCall:
                         if (_config.PlayerWeaponCalls.Value && snapshot.InMission && snapshot.Player.Valid)
                         {
                             string text = RadioText.FormatPlayerWeaponCall(evt.Text);
                             if (!string.IsNullOrEmpty(text))
                             {
+                                if (SuppressHeldPlayerWeaponCall(text, now))
+                                    break;
+
                                 float duplicateWindow = RadioText.IsGunsCall(text) ? PlayerGunsDuplicateSeconds : PlayerWeaponDuplicateSeconds;
                                 QueueText(RadioRole.Player, evt.Type, text, now, 65, 2.5f, 0.5f, false, duplicateWindow);
                                 _log.LogDebug($"Player weapon call: {text} ({evt.SubjectName ?? "unknown weapon"})");
@@ -257,6 +299,44 @@ namespace RadioChatter.Comms
                         break;
                 }
             }
+
+            ReleaseStalePlayerWeaponCalls(snapshot.Time);
+        }
+
+        private bool SuppressHeldPlayerWeaponCall(string text, float now)
+        {
+            // WeaponManager.Fire can repeat while the trigger is held; one phrase per hold is enough.
+            _playerWeaponCallsSeenThisTick.Add(text);
+
+            if (_heldPlayerWeaponCalls.ContainsKey(text))
+            {
+                _heldPlayerWeaponCalls[text] = now;
+                return true;
+            }
+
+            _heldPlayerWeaponCalls[text] = now;
+            return false;
+        }
+
+        private void ReleaseStalePlayerWeaponCalls(float now)
+        {
+            if (_heldPlayerWeaponCalls.Count == 0)
+                return;
+
+            _stalePlayerWeaponCalls.Clear();
+            float releaseSeconds = Mathf.Max(PlayerWeaponReleaseSeconds, Mathf.Clamp(_config.PollIntervalSeconds.Value, 0.1f, 2f) * 1.5f);
+
+            foreach (KeyValuePair<string, float> entry in _heldPlayerWeaponCalls)
+            {
+                if (_playerWeaponCallsSeenThisTick.Contains(entry.Key))
+                    continue;
+
+                if (now - entry.Value > releaseSeconds)
+                    _stalePlayerWeaponCalls.Add(entry.Key);
+            }
+
+            for (int i = 0; i < _stalePlayerWeaponCalls.Count; i++)
+                _heldPlayerWeaponCalls.Remove(_stalePlayerWeaponCalls[i]);
         }
 
         private void DetectDestroyedUnits(Snapshot snapshot)
@@ -524,6 +604,24 @@ namespace RadioChatter.Comms
             return _config.PlayerAcknowledgements.Value && _output.HasAudioWork(RadioRole.PlayerTower);
         }
 
+        /// <summary>True while a ground takeoff is underway but Tower has not yet completed the
+        /// airborne handoff to AWACS. Taking off from a field puts the player under Tower control;
+        /// AWACS stays silent until Tower makes the airborne "switch to {awacs}" call and that
+        /// exchange (including the player readback) has finished, so AWACS never steps on it.</summary>
+        private bool IsWaitingForAirborneHandoff()
+        {
+            if (!_takeoffClearanceAnnounced)
+                return false;
+
+            if (!_airborneAnnounced)
+                return true;
+
+            if (HasQueuedTransmission(RadioEventType.TowerAirborne))
+                return true;
+
+            return _output.HasAudioWork(RadioRole.Tower) || _output.HasAudioWork(RadioRole.PlayerTower);
+        }
+
         private bool HasQueuedTransmission(RadioEventType type)
         {
             for (int i = 0; i < _queue.Count; i++)
@@ -558,6 +656,7 @@ namespace RadioChatter.Comms
         private static bool IsStartupAwacsHoldCandidate(PendingTransmission transmission)
         {
             return transmission.Role == RadioRole.Awacs &&
+                   !transmission.BypassStartupHold &&
                    transmission.Type != RadioEventType.MissileThreat;
         }
 
@@ -592,6 +691,13 @@ namespace RadioChatter.Comms
                 return;
 
             float now = snapshot.Time;
+
+            // A ground takeoff hands the player from Tower to AWACS. While the player is still on
+            // the ground waiting to roll, keep the max-hold clock from expiring — a long taxi must
+            // not release AWACS before the handoff, which cannot happen until the player is airborne.
+            if (_takeoffClearanceAnnounced && !_airborneAnnounced && snapshot.Player.Grounded)
+                _startupRadioGateStartedAt = now;
+
             bool timedOut = !float.IsNaN(_startupRadioGateStartedAt) &&
                             now - _startupRadioGateStartedAt > StartupAwacsMaxHoldSeconds;
 
@@ -601,11 +707,28 @@ namespace RadioChatter.Comms
                     (IsStartupTakeoffCandidate(snapshot) || StartupStateStillSettling(snapshot)))
                     return;
 
+                // Hold AWACS until Tower has handed the player off with the airborne "switch to
+                // {awacs}" call and that exchange has finished playing.
+                if (IsWaitingForAirborneHandoff())
+                    return;
+
                 if (IsWaitingForTakeoffReadback(now))
                     return;
 
                 if (_startupWingmanHeld || HasQueuedTransmission(RadioRole.Game) || _output.HasAudioWork(RadioRole.Game))
                     return;
+
+                // The takeoff exchange is done and no mission comm is pending — but the first
+                // scripted mission message often arrives a few seconds into the mission. Give
+                // it a grace window so AWACS does not talk over comms that are about to start.
+                if (!_startupMissionCommsSeen)
+                {
+                    if (float.IsNaN(_startupTakeoffSequenceDoneAt))
+                        _startupTakeoffSequenceDoneAt = now;
+
+                    if (now - _startupTakeoffSequenceDoneAt < StartupMissionCommsGraceSeconds)
+                        return;
+                }
             }
 
             for (int i = 0; i < _startupAwacsTransmissions.Count; i++)
@@ -623,6 +746,17 @@ namespace RadioChatter.Comms
             _log.LogDebug(timedOut
                 ? "Startup radio gate released (timeout)."
                 : "Startup radio gate released (takeoff sequence complete or not applicable).");
+        }
+
+        /// <summary>With voice commands on and RequestDriven set, clearances and AWACS info are
+        /// pull, not push: no automatic takeoff/approach/landing clearances and no periodic
+        /// picture/vector/RTB-advisory calls — the player keys up and asks. Event-driven calls
+        /// stay automatic: new contacts, missile warnings, splashes, bingo fuel, the airborne
+        /// handoff, and welcome-home. The startup radio gate still holds AWACS while the player
+        /// sits on the ramp (up to the usual 90 s cap).</summary>
+        private bool RequestDrivenComms()
+        {
+            return _config.VoiceCommandsEnabled.Value && _config.VoiceRequestDriven.Value;
         }
 
         private void DetectTower(Snapshot snapshot)
@@ -648,7 +782,8 @@ namespace RadioChatter.Comms
                 bool wasAirborne = _stableGrounded == false;
                 _stableGrounded = true;
 
-                if (!wasAirborne && nearBase && _config.TakeoffCalls.Value && !_takeoffClearanceAnnounced)
+                if (!wasAirborne && nearBase && _config.TakeoffCalls.Value && !_takeoffClearanceAnnounced &&
+                    !RequestDrivenComms())
                 {
                     _takeoffClearanceAnnounced = true;
                     _takeoffClearanceQueuedAt = snapshot.Time;
@@ -723,7 +858,9 @@ namespace RadioChatter.Comms
             bool inboundLongEnough = !float.IsNaN(_approachInboundStartedAt) &&
                                      snapshot.Time - _approachInboundStartedAt >= ApproachRequiredInboundSeconds;
 
-            if (!_approachAnnounced && distanceM < ApproachCallDistanceM && inboundLongEnough)
+            // The distance/inbound state above keeps updating even in request-driven mode so a
+            // mid-flight toggle behaves; only the announcement itself is pull-only.
+            if (!_approachAnnounced && distanceM < ApproachCallDistanceM && inboundLongEnough && !RequestDrivenComms())
             {
                 _approachAnnounced = true;
                 Queue(RadioRole.Tower, RadioEventType.TowerApproach, "tower_approach", CommonSlots(), snapshot.Time, 70, 4f, 20f, false);
@@ -747,6 +884,11 @@ namespace RadioChatter.Comms
                     "bearing", NumberSpeech.Bearing(GPos.Bearing(snapshot.Player.Position, home.Position)),
                     "range", RadioText.FormatRange(distanceM, snapshot.Units)), snapshot.Time, 55, 4f, 300f, false);
             }
+
+            // The bingo-fuel warning above stays automatic; the periodic "continue RTB" vector
+            // advisory below is pull-only in request-driven mode ("vector to home plate").
+            if (RequestDrivenComms())
+                return;
 
             bool inRtbVectorRange = distanceM >= RtbVectorMinDistanceM && distanceM <= RtbVectorMaxDistanceM;
             bool closing = float.IsNaN(_previousRtbHomeDistance) || distanceM < _previousRtbHomeDistance - RtbVectorMinClosingMeters;
@@ -790,7 +932,7 @@ namespace RadioChatter.Comms
 
         private void DetectVector(Snapshot snapshot)
         {
-            if (!_config.VectorToTargetCalls.Value || !snapshot.HasSelectedTarget)
+            if (!_config.VectorToTargetCalls.Value || !snapshot.HasSelectedTarget || RequestDrivenComms())
                 return;
 
             float rangeM = GPos.Distance2D(snapshot.Player.Position, snapshot.SelectedTarget.Position);
@@ -802,7 +944,7 @@ namespace RadioChatter.Comms
 
         private void DetectPicture(Snapshot snapshot)
         {
-            if (!_config.PictureUpdateCalls.Value || snapshot.Contacts.Count == 0)
+            if (!_config.PictureUpdateCalls.Value || snapshot.Contacts.Count == 0 || RequestDrivenComms())
                 return;
 
             if (snapshot.Time < _suppressPictureUntil)
@@ -819,6 +961,272 @@ namespace RadioChatter.Comms
             QueueContact(snapshot, contact, RadioEventType.PictureUpdate, "awacs_picture", 30, 5f, _config.PictureIntervalSeconds.Value);
         }
 
+        private void HandleVoiceCommand(Snapshot snapshot, string transcript, float now)
+        {
+            string text = transcript == null ? string.Empty : transcript.Trim();
+            VoiceIntent intent = VoiceIntentParser.Parse(text, _config.AwacsCallsign.Value, _config.PlayerCallsign.Value);
+            string callsign = string.IsNullOrEmpty(intent.Callsign) ? _config.PlayerCallsign.Value : intent.Callsign;
+            _log.LogInfo($"Voice command: \"{text}\" -> {intent.Kind} ({intent.Station}, callsign \"{callsign}\")");
+
+            if (text.Length > 0 && _config.VoiceShowRecognizedText.Value)
+                _output.ShowSubtitle(RadioRole.Player, text, 4f);
+
+            // Radio discipline: a proper call is "<station>, [this is] <callsign>, <request>".
+            // A malformed call gets a corrective reply instead of an answer.
+            if (_config.VoiceRequireProperCalls.Value)
+            {
+                if (!intent.StationAddressed)
+                {
+                    QueueVoiceResponse(RadioRole.Awacs, RadioEventType.VoiceCommandResponse, "radio_format_unaddressed", VoiceSlots(callsign), now);
+                    return;
+                }
+
+                if (!intent.CallsignSpoken)
+                {
+                    if (intent.Station == VoiceStation.Tower)
+                        QueueVoiceResponse(RadioRole.Tower, RadioEventType.VoiceCommandResponse, "radio_format_no_callsign_tower", VoiceSlots(callsign), now);
+                    else
+                        QueueVoiceResponse(RadioRole.Awacs, RadioEventType.VoiceCommandResponse, "radio_format_no_callsign_awacs", VoiceSlots(callsign), now);
+                    return;
+                }
+            }
+
+            switch (intent.Kind)
+            {
+                case VoiceIntentKind.RequestTakeoff:
+                    RespondTakeoff(snapshot, now, callsign);
+                    break;
+                case VoiceIntentKind.RequestLanding:
+                    RespondLanding(snapshot, now, callsign);
+                    break;
+                case VoiceIntentKind.RequestPicture:
+                    RespondPicture(snapshot, now, callsign);
+                    break;
+                case VoiceIntentKind.RequestVector:
+                    RespondVector(snapshot, now, callsign);
+                    break;
+                case VoiceIntentKind.RequestVectorObjective:
+                    RespondVectorObjective(snapshot, now, callsign, intent.ObjectiveQuery);
+                    break;
+                case VoiceIntentKind.RequestObjectiveList:
+                    RespondObjectiveList(snapshot, now, callsign);
+                    break;
+                case VoiceIntentKind.RequestVectorHome:
+                    RespondVectorHome(snapshot, now, callsign);
+                    break;
+                case VoiceIntentKind.RadioCheck:
+                    if (intent.Station == VoiceStation.Tower)
+                        QueueVoiceResponse(RadioRole.Tower, RadioEventType.VoiceCommandResponse, "radio_check_tower", VoiceSlots(callsign), now);
+                    else
+                        QueueVoiceResponse(RadioRole.Awacs, RadioEventType.VoiceCommandResponse, "radio_check_awacs", VoiceSlots(callsign), now);
+                    break;
+                default:
+                    if (intent.Station == VoiceStation.Tower)
+                        QueueVoiceResponse(RadioRole.Tower, RadioEventType.VoiceCommandResponse, "say_again_tower", VoiceSlots(callsign), now);
+                    else
+                        QueueVoiceResponse(RadioRole.Awacs, RadioEventType.VoiceCommandResponse, "say_again_awacs", VoiceSlots(callsign), now);
+                    break;
+            }
+        }
+
+        private Dictionary<string, string> VoiceSlots(string callsign)
+        {
+            Dictionary<string, string> slots = CommonSlots();
+            slots["callsign"] = callsign;
+            return slots;
+        }
+
+        private void RespondTakeoff(Snapshot snapshot, float now, string callsign)
+        {
+            if (TryGetHomeBase(snapshot, out AirbaseInfo home, out float distanceM) &&
+                IsNearAirbase(home, distanceM) && snapshot.Player.Grounded)
+            {
+                // A voice-granted clearance drives the same state as the automatic one, so the
+                // startup gate and the auto tower sequence stay consistent.
+                if (!_takeoffClearanceAnnounced)
+                {
+                    _takeoffClearanceAnnounced = true;
+                    _takeoffClearanceQueuedAt = now;
+                }
+
+                Dictionary<string, string> slots = TowerSlots(home);
+                slots["callsign"] = callsign;
+                QueueVoiceResponse(RadioRole.Tower, RadioEventType.TowerTakeoff, "tower_takeoff", slots, now);
+            }
+            else
+            {
+                QueueVoiceResponse(RadioRole.Tower, RadioEventType.VoiceCommandResponse, "tower_unable", VoiceSlots(callsign), now);
+            }
+        }
+
+        private void RespondLanding(Snapshot snapshot, float now, string callsign)
+        {
+            if (!snapshot.Player.Grounded && TryGetHomeBase(snapshot, out AirbaseInfo home, out float distanceM))
+            {
+                if (distanceM < ApproachResetDistanceM)
+                {
+                    _finalAnnounced = true;
+                    _approachAnnounced = true;
+                    Dictionary<string, string> slots = TowerSlots(home);
+                    slots["callsign"] = callsign;
+                    QueueVoiceResponse(RadioRole.Tower, RadioEventType.TowerFinal, "tower_final", slots, now);
+                }
+                else
+                {
+                    Dictionary<string, string> slots = VoiceSlots(callsign);
+                    slots["range"] = RadioText.FormatRange(distanceM, snapshot.Units);
+                    QueueVoiceResponse(RadioRole.Tower, RadioEventType.VoiceCommandResponse, "tower_continue_inbound", slots, now);
+                }
+            }
+            else
+            {
+                QueueVoiceResponse(RadioRole.Tower, RadioEventType.VoiceCommandResponse, "tower_unable", VoiceSlots(callsign), now);
+            }
+        }
+
+        private void RespondPicture(Snapshot snapshot, float now, string callsign)
+        {
+            if (TryNearestContact(snapshot, 0, out ContactInfo contact))
+                QueueContact(snapshot, contact, RadioEventType.PictureUpdate, "awacs_picture", VoiceResponsePriority, 5f, 0f, force: true, callsignOverride: callsign);
+            else
+                QueueVoiceResponse(RadioRole.Awacs, RadioEventType.VoiceCommandResponse, "awacs_picture_clean", VoiceSlots(callsign), now);
+        }
+
+        private void RespondVector(Snapshot snapshot, float now, string callsign)
+        {
+            if (snapshot.HasSelectedTarget)
+                QueueContact(snapshot, snapshot.SelectedTarget, RadioEventType.VectorToTarget, "awacs_vector", VoiceResponsePriority, 5f, 0f, force: true, callsignOverride: callsign);
+            else if (TryNearestContact(snapshot, 0, out ContactInfo contact))
+                QueueContact(snapshot, contact, RadioEventType.VectorToTarget, "awacs_vector", VoiceResponsePriority, 5f, 0f, force: true, callsignOverride: callsign);
+            else
+                QueueVoiceResponse(RadioRole.Awacs, RadioEventType.VoiceCommandResponse, "awacs_no_target", VoiceSlots(callsign), now);
+        }
+
+        private void RespondVectorObjective(Snapshot snapshot, float now, string callsign, string query)
+        {
+            List<ObjectiveInfo> objectives = snapshot.Objectives;
+            if (objectives.Count == 0)
+            {
+                QueueVoiceResponse(RadioRole.Awacs, RadioEventType.VoiceCommandResponse, "awacs_no_objective", VoiceSlots(callsign), now);
+                return;
+            }
+
+            int bestIndex = -1;
+            if (!string.IsNullOrEmpty(query))
+            {
+                // Loose match against every objective name; best word-overlap wins, closest
+                // breaks ties. A reference that matches nothing gets a corrective reply
+                // rather than a silent fallback to the wrong objective.
+                int bestScore = 0;
+                for (int i = 0; i < objectives.Count; i++)
+                {
+                    int score;
+                    if (!VoiceIntentParser.LooseNameMatch(query, objectives[i].Name, out score))
+                        continue;
+
+                    if (bestIndex < 0 || score > bestScore ||
+                        (score == bestScore && objectives[i].DistanceM < objectives[bestIndex].DistanceM))
+                    {
+                        bestScore = score;
+                        bestIndex = i;
+                    }
+                }
+
+                if (bestIndex < 0)
+                {
+                    QueueVoiceResponse(RadioRole.Awacs, RadioEventType.VoiceCommandResponse, "awacs_objective_unknown", VoiceSlots(callsign), now);
+                    return;
+                }
+            }
+            else
+            {
+                for (int i = 0; i < objectives.Count; i++)
+                {
+                    if (!objectives[i].HasPosition)
+                        continue;
+
+                    if (bestIndex < 0 || objectives[i].DistanceM < objectives[bestIndex].DistanceM)
+                        bestIndex = i;
+                }
+
+                if (bestIndex < 0)
+                {
+                    QueueVoiceResponse(RadioRole.Awacs, RadioEventType.VoiceCommandResponse, "awacs_unable", VoiceSlots(callsign), now);
+                    return;
+                }
+            }
+
+            ObjectiveInfo objective = objectives[bestIndex];
+            if (!objective.HasPosition)
+            {
+                QueueVoiceResponse(RadioRole.Awacs, RadioEventType.VoiceCommandResponse, "awacs_unable", VoiceSlots(callsign), now);
+                return;
+            }
+
+            Dictionary<string, string> slots = VoiceSlots(callsign);
+            slots["objective"] = objective.Name;
+            slots["bearing"] = NumberSpeech.Bearing(GPos.Bearing(snapshot.Player.Position, objective.Position));
+            slots["range"] = RadioText.FormatRange(GPos.Distance2D(snapshot.Player.Position, objective.Position), snapshot.Units);
+            QueueVoiceResponse(RadioRole.Awacs, RadioEventType.VoiceCommandResponse, "awacs_vector_objective", slots, now);
+        }
+
+        private void RespondObjectiveList(Snapshot snapshot, float now, string callsign)
+        {
+            if (snapshot.Objectives.Count == 0)
+            {
+                QueueVoiceResponse(RadioRole.Awacs, RadioEventType.VoiceCommandResponse, "awacs_no_objective", VoiceSlots(callsign), now);
+                return;
+            }
+
+            const int maxListed = 5;
+            List<ObjectiveInfo> sorted = new List<ObjectiveInfo>(snapshot.Objectives);
+            sorted.Sort((a, b) => a.DistanceM.CompareTo(b.DistanceM));
+
+            int listed = sorted.Count < maxListed ? sorted.Count : maxListed;
+            StringBuilder builder = new StringBuilder(96);
+            for (int i = 0; i < listed; i++)
+            {
+                if (i > 0)
+                    builder.Append("; ");
+
+                builder.Append(sorted[i].Name);
+                if (sorted[i].HasPosition)
+                {
+                    builder.Append(", bearing ").Append(NumberSpeech.Bearing(GPos.Bearing(snapshot.Player.Position, sorted[i].Position)));
+                    builder.Append(", ").Append(RadioText.FormatRange(GPos.Distance2D(snapshot.Player.Position, sorted[i].Position), snapshot.Units));
+                }
+            }
+
+            if (sorted.Count > listed)
+                builder.Append("; and ").Append(sorted.Count - listed).Append(" more");
+
+            Dictionary<string, string> slots = VoiceSlots(callsign);
+            slots["objectives"] = builder.ToString();
+            QueueVoiceResponse(RadioRole.Awacs, RadioEventType.VoiceCommandResponse, "awacs_objective_list", slots, now);
+        }
+
+        private void RespondVectorHome(Snapshot snapshot, float now, string callsign)
+        {
+            if (TryGetHomeBase(snapshot, out AirbaseInfo home, out float distanceM))
+            {
+                QueueVoiceResponse(RadioRole.Awacs, RadioEventType.VoiceCommandResponse, "awacs_vector_home", Slots(
+                    "callsign", callsign,
+                    "awacs", _config.AwacsCallsign.Value,
+                    "bearing", NumberSpeech.Bearing(GPos.Bearing(snapshot.Player.Position, home.Position)),
+                    "range", RadioText.FormatRange(distanceM, snapshot.Units)), now);
+            }
+            else
+            {
+                QueueVoiceResponse(RadioRole.Awacs, RadioEventType.VoiceCommandResponse, "awacs_unable", VoiceSlots(callsign), now);
+            }
+        }
+
+        private void QueueVoiceResponse(RadioRole role, RadioEventType type, string phraseKey, IDictionary<string, string> slots, float now)
+        {
+            QueueText(role, type, _phrases.Render(phraseKey, slots), now, VoiceResponsePriority, 4f, 0f, false,
+                duplicateWindowSeconds: VoiceResponseDuplicateWindowSeconds, bypassStartupHold: true);
+        }
+
         private void QueueContact(
             Snapshot snapshot,
             ContactInfo contact,
@@ -826,7 +1234,9 @@ namespace RadioChatter.Comms
             string phraseKey,
             int priority,
             float duration,
-            float cooldown)
+            float cooldown,
+            bool force = false,
+            string callsignOverride = null)
         {
             float bearing = GPos.Bearing(snapshot.Player.Position, contact.Position);
             float rangeM = GPos.Distance2D(snapshot.Player.Position, contact.Position);
@@ -834,7 +1244,7 @@ namespace RadioChatter.Comms
             float aspectDiff = AbsDelta(contact.HeadingDeg, contactToPlayer);
             ContactAspect aspectCategory = aspectDiff < 45f ? ContactAspect.Hot : aspectDiff > 135f ? ContactAspect.Cold : ContactAspect.Flanking;
 
-            if (!ShouldConveyContactInfo(contact.Id, snapshot.Time, rangeM, aspectCategory))
+            if (!force && !ShouldConveyContactInfo(contact.Id, snapshot.Time, rangeM, aspectCategory))
                 return;
 
             string aspect = aspectCategory == ContactAspect.Hot ? "hot" : aspectCategory == ContactAspect.Cold ? "cold" : "flanking";
@@ -842,7 +1252,7 @@ namespace RadioChatter.Comms
             string altitudeClause = contact.IsAircraft ? ", " + RadioText.FormatAltitude(contact.AltitudeMslM, snapshot.Units) : string.Empty;
 
             bool queued = Queue(RadioRole.Awacs, type, phraseKey, Slots(
-                "callsign", _config.PlayerCallsign.Value,
+                "callsign", callsignOverride ?? _config.PlayerCallsign.Value,
                 "awacs", _config.AwacsCallsign.Value,
                 "bearing", NumberSpeech.Bearing(bearing),
                 "bearing_clause", bearingClause,
@@ -851,7 +1261,9 @@ namespace RadioChatter.Comms
                 "altitude_clause", altitudeClause,
                 "aspect", aspect,
                 "type", RadioText.SpokenUnitName(contact.DisplayName)), snapshot.Time, priority, duration, cooldown, false,
-                subjectId: contact.Id);
+                subjectId: contact.Id,
+                duplicateWindowSecondsOverride: force ? VoiceResponseDuplicateWindowSeconds : (float?)null,
+                bypassStartupHold: force);
 
             if (queued && contact.Id != 0)
             {
@@ -932,10 +1344,14 @@ namespace RadioChatter.Comms
             float displaySeconds,
             float cooldownSeconds,
             bool urgent,
-            uint subjectId = 0)
+            uint subjectId = 0,
+            float? duplicateWindowSecondsOverride = null,
+            bool bypassStartupHold = false)
         {
             return QueueText(role, type, _phrases.Render(phraseKey, slots), now, priority, displaySeconds, cooldownSeconds, urgent,
-                subjectId: subjectId);
+                duplicateWindowSeconds: duplicateWindowSecondsOverride ?? DuplicateWindowSeconds,
+                subjectId: subjectId,
+                bypassStartupHold: bypassStartupHold);
         }
 
         private bool QueueText(
@@ -949,7 +1365,8 @@ namespace RadioChatter.Comms
             bool urgent,
             float duplicateWindowSeconds = DuplicateWindowSeconds,
             float availableAt = float.NegativeInfinity,
-            uint subjectId = 0)
+            uint subjectId = 0,
+            bool bypassStartupHold = false)
         {
             if (string.IsNullOrWhiteSpace(text))
                 return false;
@@ -987,10 +1404,11 @@ namespace RadioChatter.Comms
                 AvailableAt = effectiveAvailableAt,
                 ExpiresAt = effectiveAvailableAt + Mathf.Max(effectiveDisplaySeconds + 10f, 15f),
                 DisplaySeconds = effectiveDisplaySeconds,
-                SubjectId = subjectId
+                SubjectId = subjectId,
+                BypassStartupHold = bypassStartupHold
             };
 
-            if (role == RadioRole.Awacs && ShouldHoldStartupAwacs(now, urgent))
+            if (role == RadioRole.Awacs && !bypassStartupHold && ShouldHoldStartupAwacs(now, urgent))
             {
                 HoldStartupAwacs(transmission);
                 return true;
@@ -1081,7 +1499,7 @@ namespace RadioChatter.Comms
             if (!string.IsNullOrEmpty(runwayName))
             {
                 Dictionary<string, string> slots = CommonSlots();
-                slots["runway"] = " runway " + RadioText.SpellDigits(runwayName);
+                slots["runway"] = " runway " + RadioText.SpeakRunway(runwayName);
                 return slots;
             }
 
@@ -1191,6 +1609,7 @@ namespace RadioChatter.Comms
             _lastTextAt.Clear();
             _lastTypeQueuedAt.Clear();
             _contactInfoLog.Clear();
+            ClearPlayerWeaponHoldState();
             _queue.Clear();
             _suppressPictureUntil = 0f;
         }
@@ -1218,6 +1637,8 @@ namespace RadioChatter.Comms
             _startupRadioGateActive = true;
             _startupAwacsReleased = false;
             _startupRadioGateStartedAt = float.NaN;
+            _startupMissionCommsSeen = false;
+            _startupTakeoffSequenceDoneAt = float.NaN;
             _startupAwacsTransmissions.Clear();
             _previousHomeDistance = float.NaN;
             _approachInboundStartedAt = float.NaN;
@@ -1226,8 +1647,16 @@ namespace RadioChatter.Comms
             _previousRtbHomeDistance = float.NaN;
             _rtbInboundStartedAt = float.NaN;
             _rtbLastInboundAt = float.NaN;
+            ClearPlayerWeaponHoldState();
             _queue.Clear();
             _suppressPictureUntil = 0f;
+        }
+
+        private void ClearPlayerWeaponHoldState()
+        {
+            _heldPlayerWeaponCalls.Clear();
+            _playerWeaponCallsSeenThisTick.Clear();
+            _stalePlayerWeaponCalls.Clear();
         }
 
         private void LogSnapshot(Snapshot snapshot)
@@ -1262,6 +1691,7 @@ namespace RadioChatter.Comms
             public float ExpiresAt;
             public float DisplaySeconds;
             public uint SubjectId;
+            public bool BypassStartupHold;
         }
 
         private enum ContactAspect

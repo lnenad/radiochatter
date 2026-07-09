@@ -114,4 +114,11 @@ if [ "$INSTALL_ONLY" -eq 1 ]; then
     exit 0
 fi
 
+# A pre-existing venv may predate newly added dependencies (e.g. faster-whisper).
+if ! "$PYTHON_EXE" -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('pocket_tts') and importlib.util.find_spec('numpy') and importlib.util.find_spec('faster_whisper') else 1)" >/dev/null 2>&1; then
+    echo "RadioChatter sidecar dependencies are missing; installing now..."
+    "$PYTHON_EXE" -m pip install --upgrade pip
+    "$PYTHON_EXE" -m pip install -r requirements.txt
+fi
+
 exec "$PYTHON_EXE" server.py --host 127.0.0.1 --port 5075 --voices voices.json --language english

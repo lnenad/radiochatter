@@ -281,8 +281,11 @@ namespace RadioChatter.Game
 
         private static bool IsAntiRadar(global::WeaponInfo info, string text)
         {
-            return info.effectiveness.antiRadar > 0.01f ||
-                   ContainsAny(text, "anti-radar", "antiradar", "anti radiation", "anti-radiation", "harm", "arm", "sead", "radar homing");
+            // The ARAD is the game's only anti-radiation missile and the only weapon that warrants
+            // "magnum"; every other air-to-ground missile is a "rifle". Match it by name so weapons
+            // that merely carry some anti-radar effectiveness are not misclassified.
+            string name = ((info.weaponName ?? string.Empty) + " " + (info.shortName ?? string.Empty)).ToLowerInvariant();
+            return name.IndexOf("arad", StringComparison.Ordinal) >= 0;
         }
 
         private static bool IsInfraredAam(global::WeaponInfo info, string text)

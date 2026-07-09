@@ -147,6 +147,14 @@ namespace RadioChatter.Audio
             return HasResponseWorkForRole(role);
         }
 
+        public void ShowSubtitle(RadioRole role, string text, float displaySeconds)
+        {
+            if (_config == null || !_config.SubtitlesEnabled.Value || string.IsNullOrWhiteSpace(text))
+                return;
+
+            AddSubtitle($"{PrefixForRole(role)} {text}", displaySeconds);
+        }
+
         public void StopAll()
         {
             _audioGeneration++;

@@ -33,8 +33,46 @@ namespace RadioChatter.Game
             FillContacts(snapshot, localHq);
             FillSelectedTarget(snapshot, aircraft);
             FillMissileThreats(snapshot, aircraft);
+            FillObjectives(snapshot, localHq, aircraft);
 
             return true;
+        }
+
+        private static void FillObjectives(Snapshot snapshot, global::FactionHQ hq, global::Aircraft aircraft)
+        {
+            try
+            {
+                System.Collections.Generic.List<global::NuclearOption.SavedMission.ObjectiveV2.Objective> objectives;
+                if (!global::MissionPosition.TryGetActiveObjectives(hq, out objectives) || objectives == null)
+                    return;
+
+                global::GlobalPosition playerPos = global::GlobalPositionExtensions.GlobalPosition(aircraft);
+                for (int i = 0; i < objectives.Count; i++)
+                {
+                    global::NuclearOption.SavedMission.ObjectiveV2.Objective objective = objectives[i];
+                    if (objective == null || objective.SavedObjective.Hidden)
+                        continue;
+
+                    string name = objective.SavedObjective.DisplayName;
+                    if (string.IsNullOrEmpty(name))
+                        continue;
+
+                    ObjectiveInfo info = new ObjectiveInfo { Name = name, DistanceM = float.MaxValue };
+                    global::MissionPosition.PositionResult result;
+                    if (global::MissionPosition.DistanceTo(objective, playerPos, out result))
+                    {
+                        info.HasPosition = true;
+                        info.Position = ToGPos(result.Position);
+                        info.DistanceM = result.Distance;
+                    }
+
+                    snapshot.Objectives.Add(info);
+                }
+            }
+            catch
+            {
+                snapshot.Objectives.Clear();
+            }
         }
 
         internal static uint PersistentId(global::Unit unit)

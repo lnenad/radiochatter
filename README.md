@@ -17,7 +17,7 @@ not pre-recorded WAVs.
 ```text
 [TWR]     Falcon 1-1, winds calm, runway two seven, cleared for takeoff.
 [PLAYER]  Cleared for takeoff runway two seven, Falcon 1-1.
-[AWACS]   Falcon 1-1, Overwatch, new contact, bearing zero four five, forty kilometers, hot.
+[AWACS]   Falcon 1-1, Overwatch, new contact, bearing zero four five, forty four zero kilometers, hot.
 [PLAYER]  Fox three!
 [AWACS]   Splash one. Good kill, Falcon 1-1.
 ```
@@ -64,6 +64,47 @@ mod disables itself rather than read state it does not own.
 **Mission / wingman comms**
 - In-game scripted messages (`MissionMessages.ShowMessage`) are captured, cleaned up, and
   voiced on a separate wingman channel.
+
+**Voice commands (push-to-talk)**
+- Hold the push-to-talk key (default `Right Alt`), speak, release — your speech is transcribed
+  locally by the sidecar (faster-whisper, no cloud) and answered in character.
+- Proper radio format is required by default: **station, callsign, request** —
+  *"Tower, Falcon 1-1, request takeoff"* or *"Overwatch, this is Falcon 1-1, request picture"*.
+  Skip the station and you get *"last calling station, say again with station and callsign"*;
+  skip the callsign and you get *"station calling tower, say again your callsign"*
+  (turn `RequireProperCalls` off for a looser mode).
+- If you identify with a different callsign than the configured one, the controller plays
+  along and answers to the callsign you actually used.
+- With voice commands on, comms are request-driven by default (`RequestDriven`): tower
+  clearances and AWACS picture/vector info come when you ask, not automatically. AWACS still
+  calls out brand-new contacts, missile threats, splashes, and bingo fuel on its own. Turn
+  the flag off to get the fully automatic pre-voice behavior back.
+- Supported requests:
+  - *"...request takeoff"* → takeoff clearance (or *"unable"* away from the field).
+  - *"...request landing"* / *"inbound"* → landing clearance with runway, or *"continue inbound"*.
+  - *"...request picture"* / *"bogey dope"* → BRA on the nearest contact, or *"picture clean"*.
+  - *"...request vector to target"* → vector to your sorted target or the nearest contact.
+  - *"...request objectives"* / *"objective list"* → AWACS reads the active objectives by
+    name, each with bearing and range, closest first.
+  - *"...vector to objective"* → bearing and range to the nearest active mission objective
+    (by name) — your navigation when the objective markers are hidden.
+  - *"...vector to objective radar site"* → a specific objective, matched loosely against
+    the objective names — no need to recite *"Destroy the radar site at Kowal"* verbatim.
+    A reference that matches nothing gets *"say again objective name"*.
+  - *"...vector to home plate"* / *"request RTB"* → bearing and range to base.
+  - *"...radio check"* → *"read you five by five"*.
+  - A proper call the controller cannot make out gets an in-character *"say again"*.
+- The recognized transcript is shown as a `[PILOT]` subtitle so you can see what was heard.
+
+**Immersion (optional HUD/map decluttering)**
+- Off by default; each behind its own flag in the `[Immersion]` config section.
+- `HideObjectiveHudMarkers` removes the floating objective pointer/label from the HUD — ask
+  AWACS for a *"vector to objective"* instead.
+- `HideAirbaseHudMarkers` removes the floating friendly-airbase marker/label from the HUD;
+  runway borders and the glideslope still appear on final approach, so you can still land.
+  Ask Tower or AWACS for a *"vector to home plate"* instead.
+- `HideMapObjectiveMarkers` clears objective markers from the tactical map; the MFD
+  objective list keeps working, and *"vector to home plate"* gets you back to base.
 
 **Presentation**
 - Distinct configurable voice per role (tower, AWACS, player, wingman).
@@ -236,6 +277,40 @@ Same-channel chatter is serialized regardless of `MaxConcurrentTransmissions`.
 
 </details>
 
+<details>
+<summary><strong>VoiceCommands</strong></summary>
+
+| Key | Default | Meaning |
+|---|---:|---|
+| `Enabled` | `true` | Push-to-talk voice commands (needs a microphone). |
+| `RequireProperCalls` | `true` | Require "station, callsign, request" format; malformed calls get a corrective reply. Off = station and callsign are optional. |
+| `RequestDriven` | `true` | Pull, not push: tower clearances (takeoff, approach, landing) and AWACS picture/vector/RTB-advisory calls must be requested by voice. New contacts, missile warnings, splashes, and bingo fuel stay automatic. Off = everything is announced automatically, as before voice commands. Only applies while voice commands are enabled. |
+| `PushToTalkKey` | `RightAlt` | Hold to record a command, release to send. Any Unity `KeyCode` name works, including `Mouse3`/`Mouse4`. |
+| `MicrophoneDevice` | empty | Microphone device name; empty uses the system default. |
+| `MaxCommandSeconds` | `8` | Longest recorded command; recording stops automatically after this. |
+| `ShowRecognizedText` | `true` | Show the recognized transcript as a `[PILOT]` subtitle. |
+
+Speech is transcribed by the sidecar's local faster-whisper model (`base.en`, ~75 MB,
+downloaded on first run next to the TTS model). Nothing leaves your machine. The first voice
+command right after game start may get a "say again" while the model finishes loading.
+
+</details>
+
+<details>
+<summary><strong>Immersion</strong></summary>
+
+| Key | Default | Meaning |
+|---|---:|---|
+| `HideObjectiveHudMarkers` | `false` | Hide the floating objective pointer and label on the HUD. |
+| `HideAirbaseHudMarkers` | `false` | Hide the floating friendly-airbase marker and distance label on the HUD (runway borders and glideslope still show on final). |
+| `HideMapObjectiveMarkers` | `false` | Hide objective markers on the tactical map (the MFD objective list keeps working). |
+
+All three are meant to pair with voice commands: with the markers gone, *"request vector to
+target"* and *"vector to home plate"* become how you actually navigate. Turning a flag off
+restores the map filter to whatever it was before.
+
+</details>
+
 ## Customizing voices
 
 Voice aliases are configured in [sidecar/voices.json](sidecar/voices.json):
@@ -368,8 +443,8 @@ weapon names:
 - `fox two!`: infrared air-to-air missile.
 - `fox three!`: active radar or otherwise radar/BVR-style air-to-air missile, including AAM
   Scythe.
-- `rifle!`: air-to-ground missile.
-- `magnum!`: anti-radar / anti-radiation missile.
+- `rifle!`: air-to-ground missile (every A2G missile except the ARAD).
+- `magnum!`: the ARAD anti-radiation missile — the game's only anti-radiation weapon.
 - `pickle!`: bomb or glide-bomb release.
 - `guns! guns! guns!`: gun or cannon fire.
 
@@ -407,9 +482,13 @@ At mission start only, RadioChatter keeps the takeoff exchange together: if wing
 lines arrive while the player is still grounded at a friendly airbase and the tower takeoff
 clearance (or the player's readback) is still pending or playing, those lines are held until
 the `[PLAYER-TWR]` readback has finished. Non-urgent AWACS lines generated during that same
-startup gate are also held. The intended first-airfield sequence is tower clearance, player
-readback, startup mission/wingman comms, then AWACS. After that startup sequence clears, the
-channels may overlap normally again.
+startup gate are also held. A takeoff from a field puts the player under tower control, so
+AWACS stays silent through the takeoff roll and climb-out until tower hands the player off with
+the airborne *"contact {awacs}"* call (and that exchange has finished playing). The intended
+first-airfield sequence is tower clearance, player readback, startup mission/wingman comms,
+takeoff, tower's airborne handoff, then AWACS. Urgent AWACS calls — missile warnings — still
+cut through immediately. A safety cap releases the hold if the handoff never arrives. After
+the startup sequence clears, the channels may overlap normally again.
 
 The sanitizer strips rich text tags, collapses whitespace, and expands compact units — `500m`
 to `500 meters`, `500ft` to `500 feet`, `120m/s` to `120 meters per second`.
@@ -526,8 +605,11 @@ The C# project references game assemblies from `<GameDir>/NuclearOption_Data/Man
 
 RadioChatter talks to a local HTTP sidecar at `http://127.0.0.1:5075`:
 
-- `GET /health` returns JSON status and loaded voice aliases.
+- `GET /health` returns JSON status, loaded voice aliases, and an `stt` readiness field.
 - `POST /speak` accepts `{"text":"...", "voice":"..."}` and returns `audio/wav`.
+- `POST /transcribe` accepts `{"audio_b64":"<base64 WAV>", "prompt":"..."}` and returns
+  `{"text":"..."}` (local faster-whisper; used for push-to-talk voice commands). Test it with
+  `python tools/test_transcribe.py some.wav`.
 
 The launchers (`sidecar/run_sidecar.bat`, `sidecar/run_sidecar.sh`) install dependencies
 automatically into `sidecar/.venv` if no usable environment exists; the Windows launcher also

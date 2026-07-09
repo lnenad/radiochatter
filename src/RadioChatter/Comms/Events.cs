@@ -37,7 +37,9 @@ namespace RadioChatter.Comms
         PlayerDefensiveCall,
         PlayerEjectionCall,
         PlayerAcknowledgement,
-        InGameComms
+        InGameComms,
+        PlayerVoiceCommand,
+        VoiceCommandResponse
     }
 
     internal struct RadioEvent
@@ -61,6 +63,8 @@ namespace RadioChatter.Comms
         /// <summary>Stops playing/pending audio of one event type, e.g. stale vector calls after a kill.</summary>
         void StopTransmissions(RadioEventType type);
         bool HasAudioWork(RadioRole role);
+        /// <summary>Shows a subtitle without synthesizing audio, e.g. the player's own recognized speech.</summary>
+        void ShowSubtitle(RadioRole role, string text, float displaySeconds);
         void StopAll();
     }
 

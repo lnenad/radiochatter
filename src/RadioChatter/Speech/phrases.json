@@ -49,5 +49,73 @@
   "awacs_picture": [
     "{callsign}, {awacs}, nearest contact{bearing_clause}, range {range}{altitude_clause}, {aspect}",
     "{callsign}, {awacs}, picture, single group{bearing_clause}, range {range}{altitude_clause}, {aspect}"
+  ],
+  "tower_unable": [
+    "{callsign}, tower, unable",
+    "{callsign}, negative, unable at this time"
+  ],
+  "tower_continue_inbound": [
+    "{callsign}, tower, you are {range} out, continue inbound, report approach",
+    "{callsign}, tower, continue inbound, {range} to the field"
+  ],
+  "awacs_picture_clean": [
+    "{callsign}, {awacs}, picture clean",
+    "{callsign}, {awacs}, clean scope, no threats"
+  ],
+  "awacs_no_target": [
+    "{callsign}, {awacs}, negative, no targets specified",
+    "{callsign}, {awacs}, unable, clean scope"
+  ],
+  "awacs_vector_objective": [
+    "{callsign}, {awacs}, objective {objective} bearing {bearing}, range {range}",
+    "{callsign}, {awacs}, steer {bearing} for {objective}, range {range}"
+  ],
+  "awacs_no_objective": [
+    "{callsign}, {awacs}, negative, no active objective",
+    "{callsign}, {awacs}, unable, no tasking on the board"
+  ],
+  "awacs_objective_list": [
+    "{callsign}, {awacs}, current tasking: {objectives}",
+    "{callsign}, {awacs}, tasking as follows: {objectives}"
+  ],
+  "awacs_objective_unknown": [
+    "{callsign}, {awacs}, negative, no objective by that name, say again",
+    "{callsign}, {awacs}, unable, say again objective name"
+  ],
+  "awacs_vector_home": [
+    "{callsign}, {awacs}, home plate bearing {bearing}, range {range}",
+    "{callsign}, {awacs}, steer {bearing} for home plate, range {range}"
+  ],
+  "awacs_unable": [
+    "{callsign}, {awacs}, unable",
+    "{callsign}, {awacs}, negative, unable"
+  ],
+  "radio_check_tower": [
+    "{callsign}, tower, read you loud and clear",
+    "{callsign}, tower, read you five by five"
+  ],
+  "radio_check_awacs": [
+    "{callsign}, {awacs}, read you five by five",
+    "{callsign}, {awacs}, loud and clear"
+  ],
+  "say_again_tower": [
+    "{callsign}, tower, say again",
+    "{callsign}, tower, unable to read your last, say again"
+  ],
+  "say_again_awacs": [
+    "{callsign}, {awacs}, say again your last",
+    "{callsign}, {awacs}, garbled, say again"
+  ],
+  "radio_format_unaddressed": [
+    "last calling station, say again with station and callsign",
+    "station calling, say again your station, callsign, and request"
+  ],
+  "radio_format_no_callsign_tower": [
+    "station calling tower, say again your callsign",
+    "station calling tower, identify"
+  ],
+  "radio_format_no_callsign_awacs": [
+    "station calling {awacs}, say again your callsign",
+    "station calling {awacs}, identify"
   ]
 }

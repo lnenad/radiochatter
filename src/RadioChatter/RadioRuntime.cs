@@ -1,6 +1,7 @@
 using BepInEx.Logging;
 using RadioChatter.Audio;
 using RadioChatter.Game;
+using RadioChatter.Speech;
 
 namespace RadioChatter
 {
@@ -8,15 +9,17 @@ namespace RadioChatter
     {
         private static StatePoller _poller;
         private static RadioAudioPlayer _output;
+        private static VoiceCommandController _voice;
         private static Config _config;
         private static ManualLogSource _log;
 
         public static bool Ready => _poller != null;
 
-        public static void Initialize(StatePoller poller, RadioAudioPlayer output, Config config, ManualLogSource log)
+        public static void Initialize(StatePoller poller, RadioAudioPlayer output, VoiceCommandController voice, Config config, ManualLogSource log)
         {
             _poller = poller;
             _output = output;
+            _voice = voice;
             _config = config;
             _log = log;
         }
@@ -25,6 +28,8 @@ namespace RadioChatter
         {
             _poller?.Tick();
             _output?.Tick();
+            _voice?.Tick();
+            ImmersionMapOptions.Tick(_config);
         }
 
         public static void LogInfoOnce(ref bool flag, string message)
@@ -41,6 +46,7 @@ namespace RadioChatter
             _output?.Shutdown();
             _poller = null;
             _output = null;
+            _voice = null;
             _config = null;
             _log = null;
         }

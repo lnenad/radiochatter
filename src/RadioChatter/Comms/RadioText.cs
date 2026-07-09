@@ -14,9 +14,26 @@ namespace RadioChatter.Comms
         public static string FormatRange(float meters, UnitsSystem units)
         {
             if (units == UnitsSystem.Imperial)
-                return $"{NumberSpeech.Natural(Mathf.Max(1, meters / 1852f))} nautical";
+            {
+                int nautical = Mathf.Max(1, Mathf.RoundToInt(meters / 1852f));
+                return $"{SpokenDistance(nautical)} nautical";
+            }
 
-            return $"{NumberSpeech.Natural(Mathf.Max(1, meters / 1000f))} kilometers";
+            int kilometers = Mathf.Max(1, Mathf.RoundToInt(meters / 1000f));
+            return $"{SpokenDistance(kilometers)} kilometers";
+        }
+
+        /// <summary>Distances pair the natural number with a digit-by-digit readout so
+        /// similar-sounding values are unmistakable over the radio — "fifteen, one five"
+        /// versus "fifty, five zero". Single-digit distances are unambiguous, so they are
+        /// spoken plainly.</summary>
+        private static string SpokenDistance(int value)
+        {
+            string natural = NumberSpeech.Natural(value);
+            if (value < 10)
+                return natural;
+
+            return natural + " " + SpellDigits(value.ToString());
         }
 
         public static string FormatAltitude(float meters, UnitsSystem units)
@@ -31,12 +48,49 @@ namespace RadioChatter.Comms
         public static string FormatRunway(AirbaseInfo home)
         {
             if (!string.IsNullOrEmpty(home.RunwayName))
-                return " runway " + SpellDigits(home.RunwayName);
+            {
+                string spoken = SpeakRunway(home.RunwayName);
+                if (!string.IsNullOrEmpty(spoken))
+                    return " runway " + spoken;
+            }
 
             if (!float.IsNaN(home.RunwayHeadingDeg))
                 return " runway " + SpellDigits(NumberSpeech.HeadingRunway(home.RunwayHeadingDeg));
 
             return string.Empty;
+        }
+
+        /// <summary>Speaks a runway designator as number-then-side ("two seven left"),
+        /// regardless of how the source string orders the digits and the L/R/C suffix.</summary>
+        public static string SpeakRunway(string name)
+        {
+            if (string.IsNullOrEmpty(name))
+                return string.Empty;
+
+            StringBuilder digits = new StringBuilder(2);
+            char side = '\0';
+            for (int i = 0; i < name.Length; i++)
+            {
+                char c = name[i];
+                if (char.IsDigit(c))
+                {
+                    if (digits.Length < 2)
+                        digits.Append(c);
+                }
+                else if (side == '\0' && IsRunwaySideLetter(c))
+                {
+                    side = char.ToUpperInvariant(c);
+                }
+            }
+
+            if (digits.Length == 0)
+                return SpellDigits(name);
+
+            string spoken = SpellDigits(digits.ToString());
+            if (side != '\0')
+                spoken += " " + SpellDigits(side.ToString());
+
+            return spoken;
         }
 
         public static string SpellDigits(string value)

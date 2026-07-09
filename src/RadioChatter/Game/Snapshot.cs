@@ -79,6 +79,14 @@ namespace RadioChatter.Game
         public string RunwayName;        // e.g. "09", may be null
     }
 
+    public struct ObjectiveInfo
+    {
+        public string Name;
+        public bool HasPosition;         // some objectives (e.g. "successful sortie") have no position
+        public GPos Position;            // closest position of this objective to the player
+        public float DistanceM;          // sort key; float.MaxValue when HasPosition is false
+    }
+
     public struct MissileThreat
     {
         public uint Id;
@@ -114,6 +122,7 @@ namespace RadioChatter.Game
         public readonly List<UnitLifecycleInfo> UnitLifecycles = new List<UnitLifecycleInfo>(256);
         public bool HasSelectedTarget;
         public ContactInfo SelectedTarget;
+        public readonly List<ObjectiveInfo> Objectives = new List<ObjectiveInfo>(8);   // active, non-hidden
 
         public void Clear()
         {
@@ -125,6 +134,7 @@ namespace RadioChatter.Game
             UnitLifecycles.Clear();
             HasSelectedTarget = false;
             SelectedTarget = default;
+            Objectives.Clear();
         }
     }
 }

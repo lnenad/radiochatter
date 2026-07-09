@@ -2,15 +2,19 @@
 """RadioChatter Pocket TTS sidecar.
 
 HTTP contract:
-  GET  /health -> 200 {"status":"ok","voices":[...]} when ready
+  GET  /health -> 200 {"status":"ok","voices":[...],"stt":"ok"|"loading"|"error"|"disabled"} when ready
                   503 {"status":"loading","phase":"downloading"|"loading"} while the model loads
                   503 {"status":"error","error":"..."} when the model failed to load
+                  ("status" reflects TTS only; speech-to-text readiness is the "stt" field)
   POST /speak  -> WAV bytes, JSON body {"text":"...", "voice":"awacs"}; 503 while not ready
+  POST /transcribe -> {"text":"..."}, JSON body {"audio_b64":"<base64 WAV>", "prompt":"..."};
+                  503 while the STT model is loading/failed/disabled
 """
 
 from __future__ import annotations
 
 import argparse
+import base64
 import io
 import json
 import os
@@ -96,6 +100,29 @@ class EngineState:
 
 STATE = EngineState()
 
+# The TTS and STT loader threads import overlapping dependency graphs (beartype,
+# typing_extensions, huggingface_hub, ...). Concurrent first-time imports of the same
+# module from two threads can expose a partially initialized module and permanently
+# poison sys.modules, so all heavy engine imports are serialized through this lock.
+IMPORT_LOCK = threading.Lock()
+
+
+class SttState:
+    """Shared speech-to-text load status, independent of the TTS engine."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.engine: WhisperSttEngine | None = None
+        self.status = "loading"  # loading | ok | error | disabled
+        self.error = ""
+
+    def snapshot(self):
+        with self.lock:
+            return self.engine, self.status, self.error
+
+
+STT_STATE = SttState()
+
 
 def _cache_is_warm() -> bool:
     """Best-effort guess whether the model still has to be downloaded.
@@ -122,7 +149,8 @@ def _cache_is_warm() -> bool:
 class PocketTtsEngine:
     def __init__(self, voices: Dict[str, str], language: str | None):
         try:
-            from pocket_tts import TTSModel
+            with IMPORT_LOCK:
+                from pocket_tts import TTSModel
         except Exception as exc:  # pragma: no cover - startup diagnostics
             raise RuntimeError(
                 "pocket-tts is not installed. Install with: python -m pip install -r requirements.txt"
@@ -155,6 +183,66 @@ class PocketTtsEngine:
         return self.sample_rate, _audio_to_wav_bytes(self.sample_rate, audio)
 
 
+class WhisperSttEngine:
+    """Local speech-to-text via faster-whisper (CPU, int8). Short push-to-talk
+    utterances transcribe in well under a second on any recent CPU."""
+
+    def __init__(self, model_name: str):
+        try:
+            with IMPORT_LOCK:
+                from faster_whisper import WhisperModel
+        except Exception as exc:  # pragma: no cover - startup diagnostics
+            raise RuntimeError(
+                "faster-whisper is not installed. Install with: python -m pip install -r requirements.txt"
+            ) from exc
+
+        # cpu_threads is capped so transcription never fights the game for cores.
+        self.model = WhisperModel(model_name, device="cpu", compute_type="int8", cpu_threads=4)
+
+    def transcribe(self, wav_bytes: bytes, prompt: str) -> str:
+        segments, _info = self.model.transcribe(
+            io.BytesIO(wav_bytes),
+            language="en",
+            beam_size=2,
+            vad_filter=True,
+            condition_on_previous_text=False,
+            initial_prompt=prompt or None,
+        )
+        return " ".join(segment.text.strip() for segment in segments).strip()
+
+
+def _load_stt_background(model_name: str) -> None:
+    """Load the STT model on its own thread; keep retrying like the TTS loader so a
+    transient first-run download failure recovers without a restart."""
+    while True:
+        with STT_STATE.lock:
+            STT_STATE.status = "loading"
+        try:
+            try:
+                engine = WhisperSttEngine(model_name)
+            except Exception as exc:
+                if os.environ.get("HF_HUB_OFFLINE") == "1":
+                    raise
+                _log(f"STT model load failed ({type(exc).__name__}: {exc}); retrying with HF_HUB_OFFLINE=1...")
+                _force_hf_offline()
+                engine = WhisperSttEngine(model_name)
+        except Exception as exc:
+            message = f"{type(exc).__name__}: {exc}"
+            with STT_STATE.lock:
+                STT_STATE.status = "error"
+                STT_STATE.error = message
+            _log(f"STT model load failed: {message}; retrying in 60s...")
+            time.sleep(60)
+            continue
+
+        with STT_STATE.lock:
+            STT_STATE.engine = engine
+            STT_STATE.status = "ok"
+            STT_STATE.error = ""
+        _log(f"Loaded STT model: {model_name}")
+        return
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "RadioChatterPocketTTS/0.1"
 
@@ -184,16 +272,20 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         engine, status, error = STATE.snapshot()
+        _stt_engine, stt_status, _stt_error = STT_STATE.snapshot()
         if engine is not None:
-            self._json(200, {"status": "ok", "voices": engine.voice_names})
+            self._json(200, {"status": "ok", "voices": engine.voice_names, "stt": stt_status})
         elif status == "error":
-            self._json(503, {"status": "error", "error": error})
+            self._json(503, {"status": "error", "error": error, "stt": stt_status})
         else:
             phase = "loading" if _cache_is_warm() else "downloading"
-            self._json(503, {"status": "loading", "phase": phase})
+            self._json(503, {"status": "loading", "phase": phase, "stt": stt_status})
 
     def do_POST(self):
         if self._reject_non_loopback():
+            return
+        if self.path == "/transcribe":
+            self._handle_transcribe()
             return
         if self.path != "/speak":
             self.send_error(404)
@@ -220,6 +312,30 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(wav_bytes)))
             self.end_headers()
             self.wfile.write(wav_bytes)
+        except Exception as exc:
+            self._json(500, {"error": f"{type(exc).__name__}: {exc}"})
+
+    def _handle_transcribe(self):
+        engine, status, error = STT_STATE.snapshot()
+        if engine is None:
+            self._json(503, {"error": error or f"speech-to-text is {status}", "stt": status})
+            return
+
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length)
+            payload = json.loads(body.decode("utf-8"))
+            audio_b64 = str(payload.get("audio_b64", ""))
+            prompt = str(payload.get("prompt", "")).strip()
+            if not audio_b64:
+                self._json(400, {"error": "audio_b64 is required"})
+                return
+
+            wav_bytes = base64.b64decode(audio_b64)
+            started = time.monotonic()
+            text = engine.transcribe(wav_bytes, prompt)
+            _log(f"Transcribed {len(wav_bytes)} bytes in {time.monotonic() - started:.2f}s: {text!r}")
+            self._json(200, {"text": text})
         except Exception as exc:
             self._json(500, {"error": f"{type(exc).__name__}: {exc}"})
 
@@ -285,6 +401,8 @@ def main() -> int:
     parser.add_argument("--port", type=int, default=5075)
     parser.add_argument("--voices", default=str(Path(__file__).with_name("voices.json")))
     parser.add_argument("--language", default="english")
+    parser.add_argument("--stt-model", default="base.en",
+                        help="faster-whisper model for /transcribe; empty string disables STT")
     args = parser.parse_args()
 
     _ensure_std_streams()
@@ -301,6 +419,17 @@ def main() -> int:
         target=_load_engine_background, args=(voices, args.language), name="model-loader", daemon=True
     )
     loader.start()
+
+    if args.stt_model:
+        _log(f"Loading speech-to-text model '{args.stt_model}' in the background...")
+        stt_loader = threading.Thread(
+            target=_load_stt_background, args=(args.stt_model,), name="stt-loader", daemon=True
+        )
+        stt_loader.start()
+    else:
+        with STT_STATE.lock:
+            STT_STATE.status = "disabled"
+        _log("Speech-to-text is disabled (--stt-model '').")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

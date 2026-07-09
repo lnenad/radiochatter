@@ -189,7 +189,7 @@ goto install_deps
 call :validate_python
 if errorlevel 1 exit /b %errorlevel%
 if defined INSTALL_ONLY goto install_deps
-"%PYTHON_EXE%" -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('pocket_tts') and importlib.util.find_spec('numpy') else 1)" >nul 2>nul
+"%PYTHON_EXE%" -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('pocket_tts') and importlib.util.find_spec('numpy') and importlib.util.find_spec('faster_whisper') else 1)" >nul 2>nul
 if errorlevel 1 (
     echo RadioChatter sidecar dependencies are missing; installing now...
     goto install_deps
