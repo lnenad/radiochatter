@@ -150,7 +150,10 @@ namespace RadioChatter.Comms
 
             _sessionActive = true;
             if (!SpokenTowerReadbacksEnabled())
+            {
                 _pendingTowerReadbacks.Clear();
+                ClearTowerReadbackPrompts();
+            }
 
             DrainPatchedEvents(snapshot);
 
@@ -1021,6 +1024,9 @@ namespace RadioChatter.Comms
         private void HandleVoiceCommand(Snapshot snapshot, string transcript, float now)
         {
             string text = transcript == null ? string.Empty : transcript.Trim();
+            if (!SpeechTranscriptFilter.HasWords(text))
+                return;
+
             VoiceIntent intent = VoiceIntentParser.Parse(text, _config.AwacsCallsign.Value, _config.PlayerCallsign.Value);
             string callsign = string.IsNullOrEmpty(intent.Callsign) ? _config.PlayerCallsign.Value : intent.Callsign;
             _log.LogInfo($"Voice command: \"{text}\" -> {intent.Kind} ({intent.Station}, callsign \"{callsign}\")");
@@ -1101,6 +1107,7 @@ namespace RadioChatter.Comms
                     continue;
 
                 _pendingTowerReadbacks.RemoveAt(i);
+                _output.ClearReadbackPrompt(expectation.Kind);
                 _log.LogInfo($"Accepted spoken Tower {expectation.Kind.ToString().ToLowerInvariant()} readback: \"{text}\"");
                 return true;
             }
@@ -1170,6 +1177,7 @@ namespace RadioChatter.Comms
             if (pending.FailedAttempts >= TowerReadbackMaxAttempts)
             {
                 _pendingTowerReadbacks.RemoveAt(index);
+                _output.ClearReadbackPrompt(expectation.Kind);
                 ApplyFailedReadbackState(expectation.Kind);
 
                 Dictionary<string, string> finalSlots = VoiceSlots(expectation.Callsign);
@@ -1237,6 +1245,13 @@ namespace RadioChatter.Comms
                 default:
                     return "the instruction";
             }
+        }
+
+        private void ClearTowerReadbackPrompts()
+        {
+            _output.ClearReadbackPrompt(TowerReadbackKind.Takeoff);
+            _output.ClearReadbackPrompt(TowerReadbackKind.Landing);
+            _output.ClearReadbackPrompt(TowerReadbackKind.Handoff);
         }
 
         private Dictionary<string, string> VoiceSlots(string callsign)
@@ -1850,6 +1865,7 @@ namespace RadioChatter.Comms
             _startupTakeoffSequenceDoneAt = float.NaN;
             _startupAwacsTransmissions.Clear();
             _pendingTowerReadbacks.Clear();
+            ClearTowerReadbackPrompts();
             _previousHomeDistance = float.NaN;
             _approachInboundStartedAt = float.NaN;
             _approachLastInboundAt = float.NaN;

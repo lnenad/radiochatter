@@ -203,21 +203,21 @@ namespace RadioChatter.Speech
             {
                 byte[] wav = EncodeWavMono16(frames, frequency, channels);
                 string transcript = PostTranscribe(url, wav, prompt);
+                if (!SpeechTranscriptFilter.HasWords(transcript))
+                {
+                    _log?.LogDebug("Ignoring push-to-talk recording with no recognized speech.");
+                    return;
+                }
+
                 RadioEventBus.Enqueue(new RadioEvent
                 {
                     Type = RadioEventType.PlayerVoiceCommand,
-                    Text = transcript ?? string.Empty
+                    Text = transcript.Trim()
                 });
             }
             catch (Exception ex)
             {
                 _log?.LogWarning($"Voice command transcription failed: {ex.GetType().Name}: {ex.Message}");
-                // An empty command still reaches the director so the station answers "say again".
-                RadioEventBus.Enqueue(new RadioEvent
-                {
-                    Type = RadioEventType.PlayerVoiceCommand,
-                    Text = string.Empty
-                });
             }
             finally
             {

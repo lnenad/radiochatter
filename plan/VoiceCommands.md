@@ -53,8 +53,9 @@ Design decisions (do not re-litigate):
   synonyms per intent. Unknown → "say again" (this is the "I don't understand" behavior).
 - Player's own voice is **not** re-synthesized; the recognized transcript is shown as a
   `[PILOT]` subtitle, then the station responds via TTS.
-- STT failure modes: sidecar down / model loading / empty transcript all resolve to a
-  "say again" response (or subtitles-only if TTS is also down — existing fallback).
+- Empty/VAD-only audio, explicit no-speech markers, and STT failures are discarded without
+  emitting a player radio event. Unknown but genuinely spoken words still resolve to an
+  in-fiction "say again" response.
 
 ## Sidecar changes (`sidecar/server.py`)
 
@@ -238,6 +239,9 @@ All implemented, built (0 warnings), deployed, and verified:
   stops waiting and issues the type-specific terminal call (cancel takeoff/hold position, go
   around, or unconfirmed handoff/radio failure). The pending readback participates in the
   existing startup Tower/wingman/AWACS gate; disabling the flag restores automatic readbacks.
+  While pending, the triggering Tower subtitle remains in the existing subtitle container; that
+  container gets a muted amber background and small `!` icon without changing its typography or
+  overall layout. The state clears on success or terminal failure.
 
 Verification:
 - Parser suite (scratchpad `parsertest`, compiles `VoiceIntentParser.cs` standalone):
@@ -250,7 +254,7 @@ Verification:
 - Note: user tweaked `awacs_no_target` wording in phrases.json — preserved.
 - Windows launcher `run_sidecar.bat` line endings must stay CRLF (build.ps1 rewrites them).
 - STT model load takes ~1–3 s (warm) in the background; a voice command issued before it is
-  ready gets a 503 → resolves to "say again", which is acceptable UX.
+  ready gets a 503 and is ignored, so the player can key up again once status reports ready.
 - faster-whisper on CPU spawns OpenMP threads; `cpu_threads=4` keeps it from fighting the game.
 - Multi-utterance protection: while a transcription is in flight the PTT key is ignored
   (single in-flight command; `_busy` flag).

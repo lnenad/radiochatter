@@ -66,6 +66,8 @@ namespace RadioChatter.Comms
         bool HasAudioWork(RadioRole role);
         /// <summary>Shows a subtitle without synthesizing audio, e.g. the player's own recognized speech.</summary>
         void ShowSubtitle(RadioRole role, string text, float displaySeconds);
+        /// <summary>Clears the persistent highlighted subtitle for a completed/failed Tower readback.</summary>
+        void ClearReadbackPrompt(TowerReadbackKind kind);
         void StopAll();
     }
 

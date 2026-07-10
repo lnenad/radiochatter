@@ -70,6 +70,8 @@ mod disables itself rather than read state it does not own.
 **Voice commands (push-to-talk)**
 - Hold the push-to-talk key (default `Right Alt`), speak, release — your speech is transcribed
   locally by the sidecar (faster-whisper, no cloud) and answered in character.
+- Accidental silent push-to-talk presses are discarded: voice activity detection must produce
+  actual words before any player radio event is transmitted.
 - Proper radio format is required by default: **station, callsign, request** —
   *"Tower, Falcon 1-1, request takeoff"* or *"Overwatch, this is Falcon 1-1, request picture"*.
   Skip the station and you get *"last calling station, say again with station and callsign"*;
@@ -84,7 +86,9 @@ mod disables itself rather than read state it does not own.
   repeat. Tower waits for at most two response attempts, then reports that no valid readback was
   received and ends the exchange: takeoff is cancelled with a hold-position instruction, an
   arrival is sent around, or an unconfirmed handoff is treated as suspected radio failure. This
-  flag only applies while voice commands are enabled.
+  flag only applies while voice commands are enabled. While a readback is pending, the normal
+  subtitle container uses a muted amber background and a small `!` icon until the readback is
+  accepted or the exchange ends.
 - With voice commands on, comms are request-driven by default (`RequestDriven`): tower
   clearances and AWACS picture/vector info come when you ask, not automatically. AWACS still
   calls out brand-new contacts, missile threats, splashes, and bingo fuel on its own. Turn
@@ -122,6 +126,8 @@ mod disables itself rather than read state it does not own.
 - Same-channel serialization — tower never talks over tower — while different channels may
   overlap naturally after the initial takeoff exchange.
 - Subtitles timed to audio playback, with a subtitles-only fallback when TTS is unavailable.
+  Tower instructions awaiting readback reuse the same subtitle container with a tinted background
+  and small alert icon, and remain visible until resolved.
 - Pause-safe: pausing the game freezes the whole radio pipeline; nothing is skipped or lost.
 - Fully customizable phrase templates via a drop-in `phrases.json` — no rebuild needed.
 
@@ -303,7 +309,8 @@ Same-channel chatter is serialized regardless of `MaxConcurrentTransmissions`.
 
 Speech is transcribed by the sidecar's local faster-whisper model (`base.en`, ~75 MB,
 downloaded on first run next to the TTS model). Nothing leaves your machine. The first voice
-command right after game start may get a "say again" while the model finishes loading.
+command right after game start is ignored if the model is not ready yet; wait for the voice
+status indicator to report ready and key up again.
 
 </details>
 
@@ -495,6 +502,9 @@ valid handoff includes `switch`/`contact`, the callsign, and the named handoff s
 calls an incorrect readback and requests a repeat. A 10-second silence is also a failed attempt.
 After two failed attempts, Tower stops waiting and reports the terminal action: cancel takeoff
 clearance and hold position, go around, or handoff unconfirmed/radio failure suspected.
+While the readback is pending, the existing subtitle container gets a muted amber background and
+a small `!` icon. Its size and typography stay consistent with routine subtitles, and the visual
+state clears immediately when the readback succeeds or the two-attempt exchange terminates.
 
 </details>
 

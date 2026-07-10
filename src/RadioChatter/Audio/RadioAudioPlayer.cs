@@ -19,6 +19,7 @@ namespace RadioChatter.Audio
         private const float PendingSpeechSeconds = 45f;
         private const float ContactInfoLifetimeSeconds = 12f;
         private const float AcknowledgementDelaySeconds = 0.35f;
+        private const float ReadbackSubtitleSafetySeconds = 45f;
         private const float ReadyBannerSeconds = 5f;
         private const int MaxPendingSpeech = 8;
         private const int MaxPendingAcknowledgements = 8;
@@ -57,6 +58,7 @@ namespace RadioChatter.Audio
         private int _audioGeneration;
         private bool _playbackLogged;
         private GUIStyle _style;
+        private GUIStyle _readbackIconStyle;
         private GUIStyle _statusStyle;
         private SidecarSupervisor.SidecarStatus _lastSidecarStatus = SidecarSupervisor.SidecarStatus.Unknown;
         private float _sidecarReadyAt = float.NaN;
@@ -153,6 +155,15 @@ namespace RadioChatter.Audio
                 return;
 
             AddSubtitle($"{PrefixForRole(role)} {text}", displaySeconds);
+        }
+
+        public void ClearReadbackPrompt(TowerReadbackKind kind)
+        {
+            for (int i = _subtitles.Count - 1; i >= 0; i--)
+            {
+                if (_subtitles[i].RequiresReadback && _subtitles[i].ReadbackKind == kind)
+                    _subtitles.RemoveAt(i);
+            }
         }
 
         public void StopAll()
@@ -254,6 +265,8 @@ namespace RadioChatter.Audio
             source.volume = _config != null ? _config.Volume.Value : 0.8f;
             source.clip = audioClip;
             source.Play();
+            TowerReadbackExpectation readbackExpectation;
+            bool requiresSpokenReadback = TryGetSpokenTowerReadback(clip, out readbackExpectation);
             _activeSources.Add(new ActiveTransmission
             {
                 Role = clip.Role,
@@ -261,11 +274,14 @@ namespace RadioChatter.Audio
                 Source = source,
                 Text = clip.Text,
                 Response = ResponseFor(clip),
-                RequiresSpokenReadback = RequiresSpokenTowerReadback(clip)
+                RequiresSpokenReadback = requiresSpokenReadback
             });
 
             if (_config != null && _config.SubtitlesEnabled.Value)
-                AddSubtitle($"{PrefixForRole(clip.Role)} {clip.Text}", clip.DisplaySeconds);
+            {
+                AddSubtitle($"{PrefixForRole(clip.Role)} {clip.Text}", clip.DisplaySeconds,
+                    requiresSpokenReadback, readbackExpectation.Kind);
+            }
 
             if (!_playbackLogged)
             {
@@ -682,13 +698,13 @@ namespace RadioChatter.Audio
             };
         }
 
-        private bool RequiresSpokenTowerReadback(ReadyClip clip)
+        private bool TryGetSpokenTowerReadback(ReadyClip clip, out TowerReadbackExpectation expectation)
         {
+            expectation = default;
             if (clip.Role != RadioRole.Tower || !SpokenTowerReadbacksEnabled())
                 return false;
 
-            TowerReadbackExpectation ignored;
-            return TowerReadbackMatcher.TryCreate(clip.Text, out ignored);
+            return TowerReadbackMatcher.TryCreate(clip.Text, out expectation);
         }
 
         private bool SpokenTowerReadbacksEnabled()
@@ -859,6 +875,12 @@ namespace RadioChatter.Audio
             if (_subtitles.Count == 0)
                 return;
 
+            EnsureSubtitleStyles();
+            DrawSubtitleContainer(BuildSubtitleText(), HasReadbackSubtitle());
+        }
+
+        private void EnsureSubtitleStyles()
+        {
             if (_style == null)
             {
                 _style = new GUIStyle(GUI.skin.label)
@@ -870,14 +892,48 @@ namespace RadioChatter.Audio
                 _style.normal.textColor = Color.white;
             }
 
-            string subtitle = BuildSubtitleText();
+            if (_readbackIconStyle == null)
+            {
+                _readbackIconStyle = new GUIStyle(GUI.skin.label)
+                {
+                    alignment = TextAnchor.MiddleCenter,
+                    fontSize = 14,
+                    fontStyle = FontStyle.Bold
+                };
+                _readbackIconStyle.normal.textColor = new Color(0.12f, 0.07f, 0.01f, 1f);
+            }
+        }
+
+        private void DrawSubtitleContainer(string subtitle, bool requiresReadback)
+        {
             float width = Mathf.Min(Screen.width - 40f, 900f);
-            float labelWidth = width - 24f;
+            float leftInset = requiresReadback ? 48f : 12f;
+            float labelWidth = width - leftInset - 12f;
             float labelHeight = _style.CalcHeight(new GUIContent(subtitle), labelWidth);
             float height = Mathf.Clamp(labelHeight + 16f, 70f, 220f);
             Rect rect = new Rect((Screen.width - width) * 0.5f, Screen.height - height - 40f, width, height);
-            GUI.Box(rect, GUIContent.none);
-            GUI.Label(new Rect(rect.x + 12f, rect.y + 8f, labelWidth, rect.height - 16f), subtitle, _style);
+
+            if (requiresReadback)
+            {
+                DrawSolidRect(rect, new Color(0.14f, 0.09f, 0.025f, 0.92f));
+                Rect icon = new Rect(rect.x + 12f, rect.center.y - 11f, 22f, 22f);
+                DrawSolidRect(icon, new Color(0.9f, 0.56f, 0.16f, 1f));
+                GUI.Label(icon, "!", _readbackIconStyle);
+            }
+            else
+            {
+                GUI.Box(rect, GUIContent.none);
+            }
+
+            GUI.Label(new Rect(rect.x + leftInset, rect.y + 8f, labelWidth, rect.height - 16f), subtitle, _style);
+        }
+
+        private static void DrawSolidRect(Rect rect, Color color)
+        {
+            Color previous = GUI.color;
+            GUI.color = color;
+            GUI.DrawTexture(rect, Texture2D.whiteTexture);
+            GUI.color = previous;
         }
 
         private void DrawSidecarStatus()
@@ -934,16 +990,40 @@ namespace RadioChatter.Audio
             GUI.Label(new Rect(rect.x + 8f, rect.y + 2f, size.x, 20f), text, _statusStyle);
         }
 
-        private void AddSubtitle(string text, float displaySeconds)
+        private void AddSubtitle(
+            string text,
+            float displaySeconds,
+            bool requiresReadback = false,
+            TowerReadbackKind readbackKind = default)
         {
             PruneSubtitles(_clock);
+
+            if (requiresReadback)
+                ClearReadbackPrompt(readbackKind);
+
             while (_subtitles.Count >= MaxActiveSubtitles)
-                _subtitles.RemoveAt(0);
+            {
+                int removeIndex = 0;
+                for (int i = 0; i < _subtitles.Count; i++)
+                {
+                    if (!_subtitles[i].RequiresReadback)
+                    {
+                        removeIndex = i;
+                        break;
+                    }
+                }
+
+                _subtitles.RemoveAt(removeIndex);
+            }
 
             _subtitles.Add(new SubtitleLine
             {
                 Text = text,
-                Until = _clock + Mathf.Max(1f, displaySeconds)
+                Until = _clock + (requiresReadback
+                    ? Mathf.Max(ReadbackSubtitleSafetySeconds, displaySeconds)
+                    : Mathf.Max(1f, displaySeconds)),
+                RequiresReadback = requiresReadback,
+                ReadbackKind = readbackKind
             });
         }
 
@@ -956,12 +1036,23 @@ namespace RadioChatter.Audio
             }
         }
 
+        private bool HasReadbackSubtitle()
+        {
+            for (int i = _subtitles.Count - 1; i >= 0; i--)
+            {
+                if (_subtitles[i].RequiresReadback)
+                    return true;
+            }
+
+            return false;
+        }
+
         private string BuildSubtitleText()
         {
             StringBuilder builder = new StringBuilder(160);
             for (int i = 0; i < _subtitles.Count; i++)
             {
-                if (i > 0)
+                if (builder.Length > 0)
                     builder.Append('\n');
                 builder.Append(_subtitles[i].Text);
             }
@@ -1065,6 +1156,8 @@ namespace RadioChatter.Audio
         {
             public string Text;
             public float Until;
+            public bool RequiresReadback;
+            public TowerReadbackKind ReadbackKind;
         }
 
         private struct BiquadFilter
