@@ -37,6 +37,9 @@ namespace RadioChatter.Comms
         PlayerDefensiveCall,
         PlayerEjectionCall,
         PlayerAcknowledgement,
+        FriendlyWeaponCall,
+        FriendlyDefensiveCall,
+        BattlefieldChatter,
         InGameComms,
         PlayerVoiceCommand,
         TowerReadbackRequired,
@@ -50,6 +53,7 @@ namespace RadioChatter.Comms
         public string SubjectName;
         public bool SubjectIsAircraft;
         public bool SubjectIsMissile;
+        public bool SubjectIsFriendly;
         public int PlayerAircraftInstanceId;
         public GPos Position;
         public float BearingDeg;
@@ -68,6 +72,10 @@ namespace RadioChatter.Comms
         void ShowSubtitle(RadioRole role, string text, float displaySeconds);
         /// <summary>Clears the persistent highlighted subtitle for a completed/failed Tower readback.</summary>
         void ClearReadbackPrompt(TowerReadbackKind kind);
+        /// <summary>Shows or refreshes the persistent, subtitle-only prompt for the post-handoff AWACS check-in.</summary>
+        void ShowAwacsCheckInPrompt(string awacsCallsign, string playerCallsign);
+        /// <summary>Clears the AWACS check-in prompt after check-in, landing, or reset.</summary>
+        void ClearAwacsCheckInPrompt();
         void StopAll();
     }
 

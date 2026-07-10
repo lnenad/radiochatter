@@ -66,6 +66,8 @@ mod disables itself rather than read state it does not own.
 **Mission / wingman comms**
 - In-game scripted messages (`MissionMessages.ShowMessage`) are captured, cleaned up, and
   voiced on a separate wingman channel.
+- Optional allied battlefield chatter reacts to real weapon releases, defensive reactions,
+  takeoffs, landings, and aircraft losses without delaying higher-priority radio traffic.
 
 **Voice commands (push-to-talk)**
 - Hold the push-to-talk key (default `Right Alt`), speak, release — your speech is transcribed
@@ -95,7 +97,9 @@ mod disables itself rather than read state it does not own.
   the flag off to get the fully automatic pre-voice behavior back.
 - After Tower's airborne handoff, check in with AWACS — for example,
   *"Overwatch, Broadsword 1-1, airborne, checking in"*. AWACS confirms radar contact, then
-  routine non-urgent AWACS traffic is released. Urgent missile warnings still cut through.
+  routine non-urgent AWACS traffic is released. Once the Tower handoff/readback exchange has
+  finished, a persistent highlighted subtitle shows the required report and an exact example;
+  it clears when AWACS accepts the check-in. Urgent missile warnings still cut through.
 - Supported requests:
   - *"...request takeoff"* → takeoff clearance (or *"unable"* away from the field).
   - *"...request landing"* / *"inbound"* → landing clearance with runway, or *"continue inbound"*.
@@ -294,6 +298,7 @@ Same-channel chatter is serialized regardless of `MaxConcurrentTransmissions`.
 | `PlayerAcknowledgements` | `true` | Short varied pilot acknowledgements after incoming radio calls finish. |
 | `InGameComms` | `true` | Reads mission-scripted comms through the wingman voice. |
 | `RtbCalls` | `true` | Low-fuel and sustained inbound return-to-base advisories. |
+| `BattlefieldChatter` | `false` | Opt-in allied-aircraft chatter for weapon releases, defensive reactions, takeoffs/landings, and losses. One ambient call can be selected every 18 seconds; events expire while the radio is busy instead of building a TTS backlog. |
 
 </details>
 
@@ -532,6 +537,14 @@ the startup sequence clears, the channels may overlap normally again.
 
 The sanitizer strips rich text tags, collapses whitespace, and expands compact units — `500m`
 to `500 meters`, `500ft` to `500 feet`, `120m/s` to `120 meters per second`.
+
+With `Callouts.BattlefieldChatter=true`, allied AI aircraft contribute short event-driven calls
+through the wingman channel. These calls have the lowest queue priority, do not play during the
+startup/handoff sequence or a pending tower readback, and are considered only when the existing
+radio queues are idle. A shared 18-second limiter bounds their frequency. Candidates expire after
+9 seconds, and accepted clips have a 10-second audio deadline, so old battlefield events are
+dropped before synthesis/playback rather than accumulating. They never trigger a synthesized
+player acknowledgement.
 
 </details>
 
@@ -797,6 +810,9 @@ installed. Use `--skip-build` if the Release DLL is already current.
   synthesized `[PLAYER-TWR]` line plays. Give one correct readback, one incomplete readback,
   and no readback; confirm acceptance, an explicit incorrect/repeat call, the 10-second retry,
   and the terminal cancellation/go-around/failure call after the second failed window.
+- Complete the airborne Tower handoff and confirm a highlighted `Report to {AWACS}` subtitle
+  appears after the handoff/readback finishes, remains through unrelated subtitles, and clears
+  immediately after a valid AWACS check-in.
 - Kill an aircraft and confirm one splash call.
 - Return to base, fly inbound for a sustained period, and confirm approach call timing.
 - Return to base from more than 18 km out and confirm the RTB vector call after sustained
@@ -806,6 +822,10 @@ installed. Use `--skip-build` if the Release DLL is already current.
   runway from it.
 - Land successfully and confirm welcome-home call.
 - Trigger multiple wingman messages and confirm they do not overlap with each other.
+- Enable `Callouts.BattlefieldChatter`, observe allied aircraft firing, defending, taking off,
+  landing, and being lost, and confirm the matching low-priority calls never exceed one every
+  18 seconds. Trigger tower/AWACS/mission traffic during the same period and confirm stale ambient
+  events are dropped rather than spoken late. Disable the flag and confirm chatter stops.
 
 </details>
 

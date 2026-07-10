@@ -105,6 +105,7 @@ namespace RadioChatter.Game
         public bool IsMissile;
         public bool IsFriendly;
         public bool IsPlayer;
+        public bool Grounded;
     }
 
     /// <summary>Per-tick view of game state. One instance is reused (main thread only);

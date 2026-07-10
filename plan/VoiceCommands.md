@@ -247,6 +247,17 @@ All implemented, built (0 warnings), deployed, and verified:
   their callsign and `checking in`, `with you`, or `airborne`. AWACS replies with radar contact
   via `awacs_check_in`, then the normal startup gate may release queued traffic. Missile warnings
   retain their urgent bypass, and the existing 90-second gate cap prevents an indefinite wait.
+  After the Tower audio and automatic/player-spoken handoff readback finish, a persistent
+  subtitle-only action prompt shows `Report to {AWACS}` plus a callsign-correct example. It uses
+  the existing amber/icon subtitle container, survives ordinary subtitle turnover, and clears on
+  accepted check-in, landing, aircraft/session reset, or when voice commands are disabled.
+- **Opt-in battlefield chatter** (`Callouts.BattlefieldChatter`, default false): Harmony events
+  capture allied AI weapon releases and defensive reactions, while the existing unit snapshot
+  detects allied takeoff, landing, and loss transitions. Events enter a separate short-lived
+  candidate list, not the speech queue. Only an idle radio may promote one candidate to the
+  low-priority wingman channel, with one shared 18-second limiter; startup/handoff/readback gates
+  suppress promotion, candidates expire after 9 seconds, and accepted audio expires after 10.
+  Ambient calls do not generate player acknowledgements, keeping TTS and radio load bounded.
 
 Verification:
 - Parser suite (scratchpad `parsertest`, compiles `VoiceIntentParser.cs` standalone):

@@ -18,6 +18,7 @@ namespace RadioChatter.Audio
         private const float MaxEffectiveNoise = 0.008f;
         private const float PendingSpeechSeconds = 45f;
         private const float ContactInfoLifetimeSeconds = 12f;
+        private const float BattlefieldChatterLifetimeSeconds = 10f;
         private const float AcknowledgementDelaySeconds = 0.35f;
         private const float ReadbackSubtitleSafetySeconds = 45f;
         private const float ReadyBannerSeconds = 5f;
@@ -93,6 +94,8 @@ namespace RadioChatter.Audio
                 case RadioEventType.PictureUpdate:
                 case RadioEventType.VectorToTarget:
                     return ContactInfoLifetimeSeconds;
+                case RadioEventType.BattlefieldChatter:
+                    return BattlefieldChatterLifetimeSeconds;
                 default:
                     return PendingSpeechSeconds;
             }
@@ -162,6 +165,39 @@ namespace RadioChatter.Audio
             for (int i = _subtitles.Count - 1; i >= 0; i--)
             {
                 if (_subtitles[i].RequiresReadback && _subtitles[i].ReadbackKind == kind)
+                    _subtitles.RemoveAt(i);
+            }
+        }
+
+        public void ShowAwacsCheckInPrompt(string awacsCallsign, string playerCallsign)
+        {
+            if (_config == null || !_config.SubtitlesEnabled.Value)
+                return;
+
+            string awacs = string.IsNullOrWhiteSpace(awacsCallsign) ? "AWACS" : awacsCallsign.Trim();
+            string player = string.IsNullOrWhiteSpace(playerCallsign) ? "your callsign" : playerCallsign.Trim();
+            string text = $"[RADIO] Report to {awacs}: \"{awacs}, {player}, checking in\"";
+
+            for (int i = 0; i < _subtitles.Count; i++)
+            {
+                if (!_subtitles[i].IsAwacsCheckInPrompt)
+                    continue;
+
+                SubtitleLine existing = _subtitles[i];
+                existing.Text = text;
+                existing.Until = float.PositiveInfinity;
+                _subtitles[i] = existing;
+                return;
+            }
+
+            AddSubtitle(text, 1f, isAwacsCheckInPrompt: true);
+        }
+
+        public void ClearAwacsCheckInPrompt()
+        {
+            for (int i = _subtitles.Count - 1; i >= 0; i--)
+            {
+                if (_subtitles[i].IsAwacsCheckInPrompt)
                     _subtitles.RemoveAt(i);
             }
         }
@@ -658,6 +694,10 @@ namespace RadioChatter.Audio
             if (_config == null || !_config.PlayerAcknowledgements.Value)
                 return default;
 
+            // Ambient allied traffic is not addressed to the player and never needs an answer.
+            if (clip.Type == RadioEventType.BattlefieldChatter)
+                return default;
+
             if (IsPlayerRole(clip.Role) || clip.Role == RadioRole.System)
                 return default;
 
@@ -876,7 +916,7 @@ namespace RadioChatter.Audio
                 return;
 
             EnsureSubtitleStyles();
-            DrawSubtitleContainer(BuildSubtitleText(), HasReadbackSubtitle());
+            DrawSubtitleContainer(BuildSubtitleText(), HasActionPrompt());
         }
 
         private void EnsureSubtitleStyles()
@@ -994,7 +1034,8 @@ namespace RadioChatter.Audio
             string text,
             float displaySeconds,
             bool requiresReadback = false,
-            TowerReadbackKind readbackKind = default)
+            TowerReadbackKind readbackKind = default,
+            bool isAwacsCheckInPrompt = false)
         {
             PruneSubtitles(_clock);
 
@@ -1006,7 +1047,7 @@ namespace RadioChatter.Audio
                 int removeIndex = 0;
                 for (int i = 0; i < _subtitles.Count; i++)
                 {
-                    if (!_subtitles[i].RequiresReadback)
+                    if (!_subtitles[i].RequiresReadback && !_subtitles[i].IsAwacsCheckInPrompt)
                     {
                         removeIndex = i;
                         break;
@@ -1019,11 +1060,14 @@ namespace RadioChatter.Audio
             _subtitles.Add(new SubtitleLine
             {
                 Text = text,
-                Until = _clock + (requiresReadback
-                    ? Mathf.Max(ReadbackSubtitleSafetySeconds, displaySeconds)
-                    : Mathf.Max(1f, displaySeconds)),
+                Until = isAwacsCheckInPrompt
+                    ? float.PositiveInfinity
+                    : _clock + (requiresReadback
+                        ? Mathf.Max(ReadbackSubtitleSafetySeconds, displaySeconds)
+                        : Mathf.Max(1f, displaySeconds)),
                 RequiresReadback = requiresReadback,
-                ReadbackKind = readbackKind
+                ReadbackKind = readbackKind,
+                IsAwacsCheckInPrompt = isAwacsCheckInPrompt
             });
         }
 
@@ -1036,11 +1080,11 @@ namespace RadioChatter.Audio
             }
         }
 
-        private bool HasReadbackSubtitle()
+        private bool HasActionPrompt()
         {
             for (int i = _subtitles.Count - 1; i >= 0; i--)
             {
-                if (_subtitles[i].RequiresReadback)
+                if (_subtitles[i].RequiresReadback || _subtitles[i].IsAwacsCheckInPrompt)
                     return true;
             }
 
@@ -1158,6 +1202,7 @@ namespace RadioChatter.Audio
             public float Until;
             public bool RequiresReadback;
             public TowerReadbackKind ReadbackKind;
+            public bool IsAwacsCheckInPrompt;
         }
 
         private struct BiquadFilter

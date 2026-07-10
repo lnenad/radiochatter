@@ -107,6 +107,26 @@
     "{callsign}, {awacs}, radar contact, proceed on mission",
     "{callsign}, {awacs}, radar contact, welcome aboard"
   ],
+  "battlefield_weapon": [
+    "{type} flight, {call}",
+    "{type}, {call}"
+  ],
+  "battlefield_defensive": [
+    "{type} flight, defensive",
+    "{type}, defensive, missile"
+  ],
+  "battlefield_airborne": [
+    "{type} flight, airborne",
+    "{type} flight, wheels up"
+  ],
+  "battlefield_landed": [
+    "{type} flight, down and safe",
+    "{type} flight, landing complete"
+  ],
+  "battlefield_lost": [
+    "mayday, {type} flight is going down",
+    "{type} flight, hit, losing the aircraft"
+  ],
   "radio_check_tower": [
     "{callsign}, tower, read you loud and clear",
     "{callsign}, tower, read you five by five"

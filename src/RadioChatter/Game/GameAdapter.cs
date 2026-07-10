@@ -107,6 +107,14 @@ namespace RadioChatter.Game
             return unit.name;
         }
 
+        internal static string RadioName(global::Unit unit)
+        {
+            if (unit != null && !string.IsNullOrWhiteSpace(unit.unitName))
+                return unit.unitName;
+
+            return DisplayName(unit);
+        }
+
         internal static string BogeyName(global::Unit unit)
         {
             if (unit != null && unit.definition != null && !string.IsNullOrEmpty(unit.definition.bogeyName))
@@ -221,17 +229,37 @@ namespace RadioChatter.Game
                 if (unit == null)
                     continue;
 
+                bool friendly = localHq != null && unit.NetworkHQ == localHq;
+                global::Aircraft aircraft = unit as global::Aircraft;
+
                 snapshot.UnitLifecycles.Add(new UnitLifecycleInfo
                 {
                     Id = PersistentId(unit),
-                    DisplayName = DisplayName(unit),
+                    DisplayName = RadioName(unit),
                     Position = PositionOf(unit),
                     Disabled = unit.disabled || unit.unitState == global::Unit.UnitState.Destroyed,
-                    IsAircraft = unit is global::Aircraft,
+                    IsAircraft = aircraft != null,
                     IsMissile = unit is global::Missile,
-                    IsFriendly = localHq != null && unit.NetworkHQ == localHq,
-                    IsPlayer = global::GameManager.IsLocalAircraft(unit)
+                    IsFriendly = friendly,
+                    IsPlayer = global::GameManager.IsLocalAircraft(unit),
+                    Grounded = friendly && aircraft != null && BattlefieldGrounded(aircraft)
                 });
+            }
+        }
+
+        private static bool BattlefieldGrounded(global::Aircraft aircraft)
+        {
+            if (Plugin.Cfg == null || !Plugin.Cfg.BattlefieldChatter.Value)
+                return false;
+
+            try
+            {
+                return aircraft.IsLanded() ||
+                       (aircraft.gearDeployed && aircraft.radarAlt < 2f && aircraft.speed < 45f);
+            }
+            catch
+            {
+                return false;
             }
         }
 

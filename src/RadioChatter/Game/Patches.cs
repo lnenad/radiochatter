@@ -63,9 +63,10 @@ namespace RadioChatter.Game
             {
                 Type = RadioEventType.UnitDestroyed,
                 SubjectId = GameAdapter.PersistentId(__instance),
-                SubjectName = GameAdapter.DisplayName(__instance),
+                SubjectName = GameAdapter.RadioName(__instance),
                 SubjectIsAircraft = __instance is global::Aircraft,
                 SubjectIsMissile = __instance is global::Missile,
+                SubjectIsFriendly = WeaponPatchHelpers.IsFriendlyAiAircraftIncludingDisabled(__instance),
                 Position = GameAdapter.PositionOf(__instance)
             });
         }
@@ -82,8 +83,22 @@ namespace RadioChatter.Game
     {
         private static void Postfix(global::Aircraft __instance, global::Missile missile)
         {
-            if (__instance == null || missile == null || !global::GameManager.IsLocalAircraft(__instance))
+            if (__instance == null || missile == null)
                 return;
+
+            if (!global::GameManager.IsLocalAircraft(__instance))
+            {
+                if (WeaponPatchHelpers.IsFriendlyAiAircraft(__instance))
+                {
+                    RadioEventBus.Enqueue(new RadioEvent
+                    {
+                        Type = RadioEventType.FriendlyDefensiveCall,
+                        SubjectId = GameAdapter.PersistentId(__instance),
+                        SubjectName = GameAdapter.RadioName(__instance)
+                    });
+                }
+                return;
+            }
 
             MissileThreat threat = GameAdapter.ThreatFromMissile(__instance, missile);
             RadioEventBus.Enqueue(new RadioEvent
@@ -203,7 +218,12 @@ namespace RadioChatter.Game
 
         private static void Postfix(global::Weapon __instance, global::Unit owner)
         {
-            if (__instance == null || owner == null || !WeaponPatchHelpers.IsLocalPlayerAircraft(owner))
+            if (__instance == null || owner == null)
+                return;
+
+            bool localPlayer = WeaponPatchHelpers.IsLocalPlayerAircraft(owner);
+            bool friendlyAi = !localPlayer && WeaponPatchHelpers.IsFriendlyAiAircraft(owner);
+            if (!localPlayer && !friendlyAi)
                 return;
 
             global::WeaponInfo info = WeaponInfoField != null ? WeaponInfoField.GetValue(__instance) as global::WeaponInfo : null;
@@ -213,8 +233,9 @@ namespace RadioChatter.Game
 
             RadioEventBus.Enqueue(new RadioEvent
             {
-                Type = RadioEventType.PlayerWeaponCall,
-                SubjectName = WeaponDisplayName(info),
+                Type = localPlayer ? RadioEventType.PlayerWeaponCall : RadioEventType.FriendlyWeaponCall,
+                SubjectId = friendlyAi ? GameAdapter.PersistentId(owner) : 0,
+                SubjectName = friendlyAi ? GameAdapter.RadioName(owner) : WeaponDisplayName(info),
                 Text = call
             });
         }
@@ -408,7 +429,19 @@ namespace RadioChatter.Game
 
             global::Aircraft aircraft = AircraftField != null ? AircraftField.GetValue(__instance) as global::Aircraft : null;
             if (!WeaponPatchHelpers.IsLocalPlayerAircraft(aircraft))
+            {
+                if (WeaponPatchHelpers.IsFriendlyAiAircraft(aircraft))
+                {
+                    RadioEventBus.Enqueue(new RadioEvent
+                    {
+                        Type = RadioEventType.FriendlyWeaponCall,
+                        SubjectId = GameAdapter.PersistentId(aircraft),
+                        SubjectName = GameAdapter.RadioName(aircraft),
+                        Text = "guns guns guns"
+                    });
+                }
                 return;
+            }
 
             RadioEventBus.Enqueue(new RadioEvent
             {
@@ -436,6 +469,35 @@ namespace RadioChatter.Game
             }
 
             return IsCurrentHudAircraft(unit as global::Aircraft);
+        }
+
+        public static bool IsFriendlyAiAircraft(global::Unit unit)
+        {
+            return IsFriendlyAiAircraft(unit, true);
+        }
+
+        public static bool IsFriendlyAiAircraftIncludingDisabled(global::Unit unit)
+        {
+            return IsFriendlyAiAircraft(unit, false);
+        }
+
+        private static bool IsFriendlyAiAircraft(global::Unit unit, bool requireActive)
+        {
+            if (unit == null || !(unit is global::Aircraft) ||
+                Plugin.Cfg == null || !Plugin.Cfg.BattlefieldChatter.Value ||
+                IsLocalPlayerAircraft(unit))
+                return false;
+
+            try
+            {
+                global::FactionHQ localHq;
+                global::GameManager.GetLocalHQ(out localHq);
+                return localHq != null && unit.NetworkHQ == localHq && (!requireActive || !unit.disabled);
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         private static bool IsCurrentHudAircraft(global::Aircraft aircraft)

@@ -115,6 +115,7 @@ namespace RadioChatter
         public readonly ConfigEntry<bool> PlayerAcknowledgements;
         public readonly ConfigEntry<bool> InGameComms;
         public readonly ConfigEntry<bool> RtbCalls;
+        public readonly ConfigEntry<bool> BattlefieldChatter;
 
         // Voice commands
         public readonly ConfigEntry<bool> VoiceCommandsEnabled;
@@ -181,6 +182,8 @@ namespace RadioChatter
             PlayerAcknowledgements = f.Bind("Callouts", "PlayerAcknowledgements", true, "Short varied pilot acknowledgements after incoming radio calls finish.");
             InGameComms = f.Bind("Callouts", "InGameComms", true, "Read mission-scripted in-game comms, such as AI wingman radio messages.");
             RtbCalls = f.Bind("Callouts", "RtbCalls", true, "Low-fuel and sustained inbound return-to-base advisories.");
+            BattlefieldChatter = f.Bind("Callouts", "BattlefieldChatter", false,
+                "Low-priority allied-aircraft chatter for weapon releases, defensive reactions, takeoffs/landings, and losses. Globally rate-limited and dropped when stale to keep TTS and radio load low.");
 
             VoiceCommandsEnabled = f.Bind("VoiceCommands", "Enabled", true,
                 "Push-to-talk voice commands: request takeoff/landing clearance, AWACS picture, vectors, radio check. Needs a microphone; speech is transcribed locally by the sidecar.");

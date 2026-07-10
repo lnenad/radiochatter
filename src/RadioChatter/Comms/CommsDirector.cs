@@ -54,6 +54,11 @@ namespace RadioChatter.Comms
         private const float VoiceResponseDuplicateWindowSeconds = 2f;
         private const float TowerReadbackResponseSeconds = 10f;
         private const int TowerReadbackMaxAttempts = 2;
+        private const float BattlefieldChatterIntervalSeconds = 18f;
+        private const float BattlefieldChatterInitialDelaySeconds = 12f;
+        private const float BattlefieldChatterCandidateLifetimeSeconds = 9f;
+        private const int BattlefieldChatterPriority = 10;
+        private const int MaxBattlefieldChatterCandidates = 16;
 
         private readonly Config _config;
         private readonly IRadioOutput _output;
@@ -75,6 +80,8 @@ namespace RadioChatter.Comms
         private readonly List<string> _startupWingmanTexts = new List<string>(MaxHeldStartupWingmanLines);
         private readonly List<PendingTransmission> _startupAwacsTransmissions = new List<PendingTransmission>(MaxHeldStartupAwacsLines);
         private readonly List<PendingTowerReadback> _pendingTowerReadbacks = new List<PendingTowerReadback>(3);
+        private readonly Dictionary<uint, FriendlyAircraftState> _friendlyAircraftStates = new Dictionary<uint, FriendlyAircraftState>(64);
+        private readonly List<BattlefieldChatterCandidate> _battlefieldChatterCandidates = new List<BattlefieldChatterCandidate>(MaxBattlefieldChatterCandidates);
 
         private int _aircraftInstanceId;
         private int _homeAirbaseInstanceId;
@@ -111,6 +118,8 @@ namespace RadioChatter.Comms
         private float _suppressPictureUntil;
         private float _suppressRoutineAwacsUntil;
         private float _lastMissileWarnAt = float.NegativeInfinity;
+        private float _nextBattlefieldChatterAt;
+        private bool _battlefieldChatterTracking;
         private bool _sessionActive;
 
         public CommsDirector(Config config, IRadioOutput output, ManualLogSource log)
@@ -170,6 +179,7 @@ namespace RadioChatter.Comms
                 return;
 
             DetectDestroyedUnits(snapshot);
+            DetectBattlefieldChatter(snapshot);
             DetectContacts(snapshot);
             DetectMissiles(snapshot);
             DetectEjection(snapshot);
@@ -180,6 +190,8 @@ namespace RadioChatter.Comms
             DetectVector(snapshot);
             DetectPicture(snapshot);
             TryReleaseHeldStartupAwacs(snapshot);
+            UpdateAwacsCheckInPrompt();
+            TryQueueBattlefieldChatter(snapshot.Time);
             ProcessQueue(snapshot.Time);
         }
 
@@ -220,6 +232,9 @@ namespace RadioChatter.Comms
                     case RadioEventType.UnitDestroyed:
                         if (evt.SubjectId != 0 && _announcedDestroyedUnits.Add(evt.SubjectId))
                             _log.LogInfo($"Event: unit destroyed: {evt.SubjectName}");
+
+                        if (evt.SubjectIsFriendly && evt.SubjectIsAircraft)
+                            AddBattlefieldChatterCandidate(evt.SubjectId, evt.SubjectName, "battlefield_lost", null, now, 4);
                         break;
 
                     case RadioEventType.PlayerKill:
@@ -311,6 +326,19 @@ namespace RadioChatter.Comms
                                 _log.LogDebug($"Player weapon call: {text} ({evt.SubjectName ?? "unknown weapon"})");
                             }
                         }
+                        break;
+
+                    case RadioEventType.FriendlyWeaponCall:
+                        string weaponCall = RadioText.FormatPlayerWeaponCall(evt.Text);
+                        if (!string.IsNullOrEmpty(weaponCall))
+                        {
+                            AddBattlefieldChatterCandidate(evt.SubjectId, evt.SubjectName, "battlefield_weapon",
+                                Slots("call", weaponCall), now, 2);
+                        }
+                        break;
+
+                    case RadioEventType.FriendlyDefensiveCall:
+                        AddBattlefieldChatterCandidate(evt.SubjectId, evt.SubjectName, "battlefield_defensive", null, now, 3);
                         break;
                 }
             }
@@ -679,6 +707,158 @@ namespace RadioChatter.Comms
             return _output.HasAudioWork(RadioRole.Tower) ||
                    _output.HasAudioWork(RadioRole.PlayerTower) ||
                    (SpokenTowerReadbacksEnabled() && HasPendingTowerReadback(TowerReadbackKind.Handoff));
+        }
+
+        private void DetectBattlefieldChatter(Snapshot snapshot)
+        {
+            if (!_config.BattlefieldChatter.Value)
+            {
+                DisableBattlefieldChatter();
+                return;
+            }
+
+            bool initializing = !_battlefieldChatterTracking;
+            if (initializing)
+            {
+                _battlefieldChatterTracking = true;
+                _nextBattlefieldChatterAt = snapshot.Time + BattlefieldChatterInitialDelaySeconds;
+            }
+
+            for (int i = 0; i < snapshot.UnitLifecycles.Count; i++)
+            {
+                UnitLifecycleInfo unit = snapshot.UnitLifecycles[i];
+                if (unit.Id == 0 || !unit.IsFriendly || !unit.IsAircraft || unit.IsPlayer)
+                    continue;
+
+                FriendlyAircraftState previous;
+                if (!initializing && _friendlyAircraftStates.TryGetValue(unit.Id, out previous))
+                {
+                    if (!previous.Disabled && unit.Disabled)
+                    {
+                        AddBattlefieldChatterCandidate(unit.Id, unit.DisplayName, "battlefield_lost", null, snapshot.Time, 4);
+                    }
+                    else if (!unit.Disabled && !previous.Disabled && previous.Grounded != unit.Grounded)
+                    {
+                        AddBattlefieldChatterCandidate(unit.Id, unit.DisplayName,
+                            unit.Grounded ? "battlefield_landed" : "battlefield_airborne", null, snapshot.Time, 1);
+                    }
+                }
+
+                _friendlyAircraftStates[unit.Id] = new FriendlyAircraftState
+                {
+                    Disabled = unit.Disabled,
+                    Grounded = unit.Grounded
+                };
+            }
+        }
+
+        private void AddBattlefieldChatterCandidate(
+            uint subjectId,
+            string subjectName,
+            string phraseKey,
+            IDictionary<string, string> extraSlots,
+            float now,
+            int importance)
+        {
+            if (!_config.BattlefieldChatter.Value || subjectId == 0 || string.IsNullOrWhiteSpace(phraseKey))
+                return;
+
+            for (int i = _battlefieldChatterCandidates.Count - 1; i >= 0; i--)
+            {
+                BattlefieldChatterCandidate existing = _battlefieldChatterCandidates[i];
+                if (existing.ExpiresAt < now)
+                {
+                    _battlefieldChatterCandidates.RemoveAt(i);
+                    continue;
+                }
+
+                if (existing.SubjectId == subjectId && existing.PhraseKey == phraseKey)
+                    return;
+            }
+
+            if (_battlefieldChatterCandidates.Count >= MaxBattlefieldChatterCandidates)
+                _battlefieldChatterCandidates.RemoveAt(0);
+
+            Dictionary<string, string> slots = Slots("type", RadioText.SpokenUnitName(subjectName));
+            if (extraSlots != null)
+            {
+                foreach (KeyValuePair<string, string> slot in extraSlots)
+                    slots[slot.Key] = slot.Value;
+            }
+
+            _battlefieldChatterCandidates.Add(new BattlefieldChatterCandidate
+            {
+                SubjectId = subjectId,
+                PhraseKey = phraseKey,
+                Slots = slots,
+                CreatedAt = now,
+                ExpiresAt = now + BattlefieldChatterCandidateLifetimeSeconds,
+                Importance = importance
+            });
+        }
+
+        private void TryQueueBattlefieldChatter(float now)
+        {
+            if (!_config.BattlefieldChatter.Value || !_battlefieldChatterTracking)
+                return;
+
+            for (int i = _battlefieldChatterCandidates.Count - 1; i >= 0; i--)
+            {
+                if (_battlefieldChatterCandidates[i].ExpiresAt < now)
+                    _battlefieldChatterCandidates.RemoveAt(i);
+            }
+
+            if (_battlefieldChatterCandidates.Count == 0 || now < _nextBattlefieldChatterAt ||
+                _startupRadioGateActive || _awaitingAwacsCheckIn || _pendingTowerReadbacks.Count > 0 ||
+                _queue.Count > 0 || HasAnyRadioAudioWork())
+            {
+                return;
+            }
+
+            int bestIndex = 0;
+            for (int i = 1; i < _battlefieldChatterCandidates.Count; i++)
+            {
+                BattlefieldChatterCandidate candidate = _battlefieldChatterCandidates[i];
+                BattlefieldChatterCandidate best = _battlefieldChatterCandidates[bestIndex];
+                if (candidate.Importance > best.Importance ||
+                    candidate.Importance == best.Importance && candidate.CreatedAt < best.CreatedAt)
+                {
+                    bestIndex = i;
+                }
+            }
+
+            BattlefieldChatterCandidate selected = _battlefieldChatterCandidates[bestIndex];
+            _battlefieldChatterCandidates.RemoveAt(bestIndex);
+            if (Queue(RadioRole.Game, RadioEventType.BattlefieldChatter, selected.PhraseKey, selected.Slots,
+                now, BattlefieldChatterPriority, 3f, 0f, false, selected.SubjectId))
+            {
+                _nextBattlefieldChatterAt = now + BattlefieldChatterIntervalSeconds;
+            }
+        }
+
+        private bool HasAnyRadioAudioWork()
+        {
+            return _output.HasAudioWork(RadioRole.Tower) ||
+                   _output.HasAudioWork(RadioRole.Awacs) ||
+                   _output.HasAudioWork(RadioRole.Player) ||
+                   _output.HasAudioWork(RadioRole.PlayerTower) ||
+                   _output.HasAudioWork(RadioRole.PlayerFlight) ||
+                   _output.HasAudioWork(RadioRole.PlayerAwacs) ||
+                   _output.HasAudioWork(RadioRole.Game) ||
+                   _output.HasAudioWork(RadioRole.System);
+        }
+
+        private void DisableBattlefieldChatter()
+        {
+            if (!_battlefieldChatterTracking && _battlefieldChatterCandidates.Count == 0)
+                return;
+
+            _battlefieldChatterTracking = false;
+            _nextBattlefieldChatterAt = 0f;
+            _friendlyAircraftStates.Clear();
+            _battlefieldChatterCandidates.Clear();
+            _queue.RemoveAll(item => item.Type == RadioEventType.BattlefieldChatter);
+            _output.StopTransmissions(RadioEventType.BattlefieldChatter);
         }
 
         private bool HasQueuedTransmission(RadioEventType type)
@@ -1115,6 +1295,7 @@ namespace RadioChatter.Comms
         private void RespondAwacsCheckIn(float now, string callsign)
         {
             _awaitingAwacsCheckIn = false;
+            _output.ClearAwacsCheckInPrompt();
             QueueVoiceResponse(RadioRole.Awacs, RadioEventType.VoiceCommandResponse,
                 "awacs_check_in", VoiceSlots(callsign), now);
             _log.LogInfo($"AWACS check-in complete for {callsign}.");
@@ -1281,6 +1462,27 @@ namespace RadioChatter.Comms
             _output.ClearReadbackPrompt(TowerReadbackKind.Takeoff);
             _output.ClearReadbackPrompt(TowerReadbackKind.Landing);
             _output.ClearReadbackPrompt(TowerReadbackKind.Handoff);
+        }
+
+        private void UpdateAwacsCheckInPrompt()
+        {
+            if (!_awaitingAwacsCheckIn)
+            {
+                _output.ClearAwacsCheckInPrompt();
+                return;
+            }
+
+            // Do not ask the player to report to AWACS until Tower's handoff and either the
+            // automatic or player-spoken handoff readback have completely left the radio lane.
+            if (HasQueuedTransmission(RadioEventType.TowerAirborne) ||
+                _output.HasAudioWork(RadioRole.Tower) ||
+                _output.HasAudioWork(RadioRole.PlayerTower) ||
+                HasPendingTowerReadback(TowerReadbackKind.Handoff))
+            {
+                return;
+            }
+
+            _output.ShowAwacsCheckInPrompt(_config.AwacsCallsign.Value, _config.PlayerCallsign.Value);
         }
 
         private Dictionary<string, string> VoiceSlots(string callsign)
@@ -1635,6 +1837,14 @@ namespace RadioChatter.Comms
                 now - lastTextTime < duplicateWindowSeconds)
                 return false;
 
+            // Real controller, player, threat, and mission traffic always wins. Purging here also
+            // invalidates an in-flight ambient TTS request before it can become a playable clip.
+            if (type != RadioEventType.BattlefieldChatter && priority > BattlefieldChatterPriority)
+            {
+                _queue.RemoveAll(item => item.Type == RadioEventType.BattlefieldChatter);
+                _output.StopTransmissions(RadioEventType.BattlefieldChatter);
+            }
+
             _lastTextAt[text] = now;
             _lastTypeQueuedAt[type] = now;
 
@@ -1865,6 +2075,7 @@ namespace RadioChatter.Comms
             _suppressPictureUntil = 0f;
             _suppressRoutineAwacsUntil = 0f;
             _lastMissileWarnAt = float.NegativeInfinity;
+            DisableBattlefieldChatter();
         }
 
         private void ResetForAircraft(int aircraftInstanceId)
@@ -1877,6 +2088,7 @@ namespace RadioChatter.Comms
             _takeoffClearanceAnnounced = false;
             _airborneAnnounced = false;
             _awaitingAwacsCheckIn = false;
+            _output.ClearAwacsCheckInPrompt();
             _approachAnnounced = false;
             _finalAnnounced = false;
             _landedAnnounced = false;
@@ -1908,6 +2120,11 @@ namespace RadioChatter.Comms
             _suppressPictureUntil = 0f;
             _suppressRoutineAwacsUntil = 0f;
             _lastMissileWarnAt = float.NegativeInfinity;
+            _battlefieldChatterTracking = false;
+            _nextBattlefieldChatterAt = 0f;
+            _friendlyAircraftStates.Clear();
+            _battlefieldChatterCandidates.Clear();
+            _output.StopTransmissions(RadioEventType.BattlefieldChatter);
         }
 
         private void ClearPlayerWeaponHoldState()
@@ -1957,6 +2174,22 @@ namespace RadioChatter.Comms
             public TowerReadbackExpectation Expectation;
             public float AwaitingSince;
             public int FailedAttempts;
+        }
+
+        private struct FriendlyAircraftState
+        {
+            public bool Disabled;
+            public bool Grounded;
+        }
+
+        private struct BattlefieldChatterCandidate
+        {
+            public uint SubjectId;
+            public string PhraseKey;
+            public Dictionary<string, string> Slots;
+            public float CreatedAt;
+            public float ExpiresAt;
+            public int Importance;
         }
 
         private enum ContactAspect
