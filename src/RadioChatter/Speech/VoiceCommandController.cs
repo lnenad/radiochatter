@@ -236,7 +236,8 @@ namespace RadioChatter.Speech
                    "Request landing clearance. Inbound. " +
                    "Request picture. Bogey dope. Request vector to target. " +
                    "Vector to objective. Request objective list. " +
-                   "Vector to home plate. Return to base. Radio check.";
+                   "Vector to home plate. Return to base. Radio check. " +
+                   _config.AwacsCallsign.Value + ", " + _config.PlayerCallsign.Value + ", airborne, checking in.";
 
             if (_config.VoiceRequireTowerReadbacks.Value)
             {

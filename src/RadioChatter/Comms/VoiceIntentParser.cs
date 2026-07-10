@@ -13,6 +13,7 @@ namespace RadioChatter.Comms
         RequestVectorObjective,
         RequestObjectiveList,
         RequestVectorHome,
+        CheckIn,
         RadioCheck
     }
 
@@ -51,9 +52,9 @@ namespace RadioChatter.Comms
         private static readonly HashSet<string> CallsignStopWords = new HashSet<string>
         {
             "request", "requesting", "requests", "ready", "cleared", "clearance",
-            "radio", "comm", "comms", "mic", "how",
+            "radio", "comm", "comms", "mic", "how", "check", "checking",
             "takeoff", "take", "taxi", "departure",
-            "land", "landing", "inbound", "approach", "full", "downwind", "overhead",
+            "land", "landing", "inbound", "approach", "full", "downwind", "overhead", "airborne",
             "return", "returning", "rtb", "home", "base",
             "vector", "bearing", "steer", "heading", "intercept", "target", "bandit",
             "objective", "objectives", "list", "tasking", "status", "current", "active", "available", "all",
@@ -345,6 +346,9 @@ namespace RadioChatter.Comms
 
             if (HasAny(text, "radio check", "comm check", "comms check", "mic check", "how do you read"))
                 return VoiceIntentKind.RadioCheck;
+
+            if (HasAny(text, "check in", "checking in", "checking on", "with you", "airborne"))
+                return VoiceIntentKind.CheckIn;
 
             bool wantsHome = HasAny(text, "home", "base", "airfield", "airport", "field", "mother");
             if (HasAny(text, "rtb", "return to base", "returning to base"))

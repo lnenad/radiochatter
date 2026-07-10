@@ -93,6 +93,9 @@ mod disables itself rather than read state it does not own.
   clearances and AWACS picture/vector info come when you ask, not automatically. AWACS still
   calls out brand-new contacts, missile threats, splashes, and bingo fuel on its own. Turn
   the flag off to get the fully automatic pre-voice behavior back.
+- After Tower's airborne handoff, check in with AWACS — for example,
+  *"Overwatch, Broadsword 1-1, airborne, checking in"*. AWACS confirms radar contact, then
+  routine non-urgent AWACS traffic is released. Urgent missile warnings still cut through.
 - Supported requests:
   - *"...request takeoff"* → takeoff clearance (or *"unable"* away from the field).
   - *"...request landing"* / *"inbound"* → landing clearance with runway, or *"continue inbound"*.
@@ -106,6 +109,7 @@ mod disables itself rather than read state it does not own.
     the objective names — no need to recite *"Destroy the radar site at Kowal"* verbatim.
     A reference that matches nothing gets *"say again objective name"*.
   - *"...vector to home plate"* / *"request RTB"* → bearing and range to base.
+  - *"...airborne, checking in"* / *"...with you"* → AWACS radar-contact acknowledgement.
   - *"...radio check"* → *"read you five by five"*.
   - A proper call the controller cannot make out gets an in-character *"say again"*.
 - The recognized transcript is shown as a `[PILOT]` subtitle so you can see what was heard.

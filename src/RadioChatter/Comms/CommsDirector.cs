@@ -83,6 +83,7 @@ namespace RadioChatter.Comms
         private int _airborneTicks;
         private bool _takeoffClearanceAnnounced;
         private bool _airborneAnnounced;
+        private bool _awaitingAwacsCheckIn;
         private bool _approachAnnounced;
         private bool _finalAnnounced;
         private bool _landedAnnounced;
@@ -149,6 +150,9 @@ namespace RadioChatter.Comms
             }
 
             _sessionActive = true;
+            if (!_config.VoiceCommandsEnabled.Value)
+                _awaitingAwacsCheckIn = false;
+
             if (!SpokenTowerReadbacksEnabled())
             {
                 _pendingTowerReadbacks.Clear();
@@ -657,6 +661,9 @@ namespace RadioChatter.Comms
         /// exchange (including the player readback) has finished, so AWACS never steps on it.</summary>
         private bool IsWaitingForAirborneHandoff()
         {
+            if (_awaitingAwacsCheckIn)
+                return true;
+
             if (!_takeoffClearanceAnnounced)
                 return false;
 
@@ -839,6 +846,9 @@ namespace RadioChatter.Comms
                 bool wasAirborne = _stableGrounded == false;
                 _stableGrounded = true;
 
+                if (wasAirborne)
+                    _awaitingAwacsCheckIn = false;
+
                 if (!wasAirborne && nearBase && _config.TakeoffCalls.Value && !_takeoffClearanceAnnounced &&
                     !RequestDrivenComms())
                 {
@@ -868,6 +878,7 @@ namespace RadioChatter.Comms
                 if (wasGrounded && nearBase && _config.TakeoffCalls.Value && !_airborneAnnounced)
                 {
                     _airborneAnnounced = true;
+                    _awaitingAwacsCheckIn = _config.VoiceCommandsEnabled.Value;
                     Queue(RadioRole.Tower, RadioEventType.TowerAirborne, "tower_airborne", CommonSlots(), snapshot.Time, 70, 4f, 0f, false);
                 }
             }
@@ -1080,6 +1091,12 @@ namespace RadioChatter.Comms
                 case VoiceIntentKind.RequestVectorHome:
                     RespondVectorHome(snapshot, now, callsign);
                     break;
+                case VoiceIntentKind.CheckIn:
+                    if (intent.Station == VoiceStation.Tower)
+                        QueueVoiceResponse(RadioRole.Tower, RadioEventType.VoiceCommandResponse, "say_again_tower", VoiceSlots(callsign), now);
+                    else
+                        RespondAwacsCheckIn(now, callsign);
+                    break;
                 case VoiceIntentKind.RadioCheck:
                     if (intent.Station == VoiceStation.Tower)
                         QueueVoiceResponse(RadioRole.Tower, RadioEventType.VoiceCommandResponse, "radio_check_tower", VoiceSlots(callsign), now);
@@ -1093,6 +1110,14 @@ namespace RadioChatter.Comms
                         QueueVoiceResponse(RadioRole.Awacs, RadioEventType.VoiceCommandResponse, "say_again_awacs", VoiceSlots(callsign), now);
                     break;
             }
+        }
+
+        private void RespondAwacsCheckIn(float now, string callsign)
+        {
+            _awaitingAwacsCheckIn = false;
+            QueueVoiceResponse(RadioRole.Awacs, RadioEventType.VoiceCommandResponse,
+                "awacs_check_in", VoiceSlots(callsign), now);
+            _log.LogInfo($"AWACS check-in complete for {callsign}.");
         }
 
         private bool TryHandleTowerReadback(string text, VoiceIntent intent, float now)
@@ -1214,6 +1239,10 @@ namespace RadioChatter.Comms
             {
                 _finalAnnounced = false;
                 _approachAnnounced = false;
+            }
+            else if (kind == TowerReadbackKind.Handoff)
+            {
+                _awaitingAwacsCheckIn = false;
             }
         }
 
@@ -1847,6 +1876,7 @@ namespace RadioChatter.Comms
             _airborneTicks = 0;
             _takeoffClearanceAnnounced = false;
             _airborneAnnounced = false;
+            _awaitingAwacsCheckIn = false;
             _approachAnnounced = false;
             _finalAnnounced = false;
             _landedAnnounced = false;

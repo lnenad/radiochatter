@@ -242,6 +242,11 @@ All implemented, built (0 warnings), deployed, and verified:
   While pending, the triggering Tower subtitle remains in the existing subtitle container; that
   container gets a muted amber background and small `!` icon without changing its typography or
   overall layout. The state clears on success or terminal failure.
+- **AWACS check-in after handoff:** when voice commands are enabled, Tower's airborne handoff
+  leaves routine AWACS traffic parked until the player calls the configured AWACS station with
+  their callsign and `checking in`, `with you`, or `airborne`. AWACS replies with radar contact
+  via `awacs_check_in`, then the normal startup gate may release queued traffic. Missile warnings
+  retain their urgent bypass, and the existing 90-second gate cap prevents an indefinite wait.
 
 Verification:
 - Parser suite (scratchpad `parsertest`, compiles `VoiceIntentParser.cs` standalone):

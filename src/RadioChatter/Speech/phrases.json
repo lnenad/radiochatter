@@ -102,6 +102,11 @@
     "{callsign}, {awacs}, unable",
     "{callsign}, {awacs}, negative, unable"
   ],
+  "awacs_check_in": [
+    "{callsign}, {awacs}, radar contact, check-in acknowledged",
+    "{callsign}, {awacs}, radar contact, proceed on mission",
+    "{callsign}, {awacs}, radar contact, welcome aboard"
+  ],
   "radio_check_tower": [
     "{callsign}, tower, read you loud and clear",
     "{callsign}, tower, read you five by five"
