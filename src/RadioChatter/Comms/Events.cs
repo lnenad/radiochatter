@@ -39,6 +39,7 @@ namespace RadioChatter.Comms
         PlayerAcknowledgement,
         InGameComms,
         PlayerVoiceCommand,
+        TowerReadbackRequired,
         VoiceCommandResponse
     }
 

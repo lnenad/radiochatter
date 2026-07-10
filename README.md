@@ -58,8 +58,10 @@ mod disables itself rather than read state it does not own.
   and `guns! guns! guns!`, classified from the actual weapon fired.
 - Defensive calls for incoming missiles (`missile, break`) and an ejection mayday that
   interrupts everything else.
-- Readbacks for tower clearances and AWACS handoffs; short varied acknowledgements after other
-  incoming comms, labeled by source (`[PLAYER-TWR]`, `[PLAYER-FLIGHT]`, `[PLAYER-AWACS]`).
+- Readbacks for tower clearances and airborne handoffs; short varied acknowledgements after other
+  incoming comms, labeled by source (`[PLAYER-TWR]`, `[PLAYER-FLIGHT]`, `[PLAYER-AWACS]`). Tower
+  readbacks are synthesized automatically by default, or can be spoken by the player with
+  `RequireTowerReadbacks`.
 
 **Mission / wingman comms**
 - In-game scripted messages (`MissionMessages.ShowMessage`) are captured, cleaned up, and
@@ -75,6 +77,14 @@ mod disables itself rather than read state it does not own.
   (turn `RequireProperCalls` off for a looser mode).
 - If you identify with a different callsign than the configured one, the controller plays
   along and answers to the callsign you actually used.
+- Turn on `RequireTowerReadbacks` to replace synthesized Tower readbacks with real push-to-talk
+  readbacks. Repeat the instruction, your callsign, and any assigned runway or handoff station,
+  for example *"cleared for takeoff runway two seven, Falcon 1-1"*. Tower reports an incorrect
+  readback and asks for it again; 10 seconds of silence also consumes an attempt and prompts a
+  repeat. Tower waits for at most two response attempts, then reports that no valid readback was
+  received and ends the exchange: takeoff is cancelled with a hold-position instruction, an
+  arrival is sent around, or an unconfirmed handoff is treated as suspected radio failure. This
+  flag only applies while voice commands are enabled.
 - With voice commands on, comms are request-driven by default (`RequestDriven`): tower
   clearances and AWACS picture/vector info come when you ask, not automatically. AWACS still
   calls out brand-new contacts, missile threats, splashes, and bingo fuel on its own. Turn
@@ -284,6 +294,7 @@ Same-channel chatter is serialized regardless of `MaxConcurrentTransmissions`.
 |---|---:|---|
 | `Enabled` | `true` | Push-to-talk voice commands (needs a microphone). |
 | `RequireProperCalls` | `true` | Require "station, callsign, request" format; malformed calls get a corrective reply. Off = station and callsign are optional. |
+| `RequireTowerReadbacks` | `false` | Replace automatic synthesized Tower readbacks with player-spoken readbacks. Takeoff/landing readbacks must repeat the clearance, callsign, and assigned runway; handoffs must repeat the switch/contact instruction, callsign, and handoff station. Tower allows two attempts, correcting an invalid attempt or prompting after 10 seconds of silence. After the second failure it cancels takeoff and says hold position, sends an arrival around, or reports an unconfirmed handoff/radio failure. Only applies while voice commands are enabled. |
 | `RequestDriven` | `true` | Pull, not push: tower clearances (takeoff, approach, landing) and AWACS picture/vector/RTB-advisory calls must be requested by voice. New contacts, missile warnings, splashes, and bingo fuel stay automatic. Off = everything is announced automatically, as before voice commands. Only applies while voice commands are enabled. |
 | `PushToTalkKey` | `RightAlt` | Hold to record a command, release to send. Any Unity `KeyCode` name works, including `Mouse3`/`Mouse4`. |
 | `MicrophoneDevice` | empty | Microphone device name; empty uses the system default. |
@@ -448,8 +459,14 @@ weapon names:
 - `pickle!`: bomb or glide-bomb release.
 - `guns! guns! guns!`: gun or cannon fire.
 
-Incoming missile events also add a pilot defensive call on the player channel:
-`missile, break`.
+Incoming missiles take priority over everything. A fresh threat cuts off whatever routine call
+(AWACS target/picture, tower, wingman) is mid-transmission and drops the pending queue, then the
+warning goes out immediately and routine AWACS info stays quiet for a few seconds. Both the AWACS
+warning and the pilot's defensive call carry an escape vector — a `break left` / `break right`
+that beams the threat (turns to drive it onto the 3/9 line with the smaller turn): the pilot
+calls `missile, break right!` while AWACS calls `defend, defend, missile inbound bearing zero
+nine zero, break right`. Closely-spaced launches queue behind one another rather than cutting each
+other off.
 
 Player ejection is detected from the local aircraft ejected state and interrupts current
 chatter so the pilot call plays immediately: `mayday! mayday! ejecting!`. This mayday is
@@ -463,12 +480,21 @@ If a weapon maps incorrectly, enable BepInEx debug logging and check the
 
 After incoming tower, AWACS, or wingman comms finish and the non-player radio queue is
 drained, the player channel may respond. Tower takeoff clearance, landing clearance, and
-AWACS handoff get specific readbacks; other comms get short varied acknowledgements. If
+airborne handoff get specific readbacks; other comms get short varied acknowledgements. If
 overlapping tower/AWACS/wingman lines finish together, multiple player responses are queued
 and played sequentially on the shared player channel. Responses are coalesced by source while
 one is already pending or playing, so a batch of AWACS calls gets one `[PLAYER-AWACS]`
 response and a batch of flight chatter gets one `[PLAYER-FLIGHT]` response. Missile/defend
 calls are excluded so they do not get casual acknowledgements during defensive moments.
+
+With `VoiceCommands.RequireTowerReadbacks = true`, those three Tower readbacks are not
+synthesized. Once the Tower transmission finishes, the expected readback is tracked until the
+player speaks it through push-to-talk. A valid clearance readback includes `cleared for takeoff`
+or `cleared to land`, the addressed callsign, and the complete runway when one was assigned; a
+valid handoff includes `switch`/`contact`, the callsign, and the named handoff station. Tower
+calls an incorrect readback and requests a repeat. A 10-second silence is also a failed attempt.
+After two failed attempts, Tower stops waiting and reports the terminal action: cancel takeoff
+clearance and hold position, go around, or handoff unconfirmed/radio failure suspected.
 
 </details>
 
@@ -753,6 +779,10 @@ installed. Use `--skip-build` if the Release DLL is already current.
 - Let a tower clearance/handoff finish and confirm the player gives a readback; let an
   AWACS/wingman line finish and confirm a short varied acknowledgement follows after the
   non-player radio queue drains.
+- Enable `VoiceCommands.RequireTowerReadbacks`, request a Tower clearance, and confirm no
+  synthesized `[PLAYER-TWR]` line plays. Give one correct readback, one incomplete readback,
+  and no readback; confirm acceptance, an explicit incorrect/repeat call, the 10-second retry,
+  and the terminal cancellation/go-around/failure call after the second failed window.
 - Kill an aircraft and confirm one splash call.
 - Return to base, fly inbound for a sustained period, and confirm approach call timing.
 - Return to base from more than 18 km out and confirm the RTB vector call after sustained

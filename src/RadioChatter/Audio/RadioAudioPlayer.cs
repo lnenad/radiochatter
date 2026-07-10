@@ -260,7 +260,8 @@ namespace RadioChatter.Audio
                 Type = clip.Type,
                 Source = source,
                 Text = clip.Text,
-                Response = ResponseFor(clip)
+                Response = ResponseFor(clip),
+                RequiresSpokenReadback = RequiresSpokenTowerReadback(clip)
             });
 
             if (_config != null && _config.SubtitlesEnabled.Value)
@@ -286,6 +287,15 @@ namespace RadioChatter.Audio
 
                 StopAndDestroySource(source);
                 _activeSources.RemoveAt(i);
+                if (active.RequiresSpokenReadback)
+                {
+                    RadioEventBus.Enqueue(new RadioEvent
+                    {
+                        Type = RadioEventType.TowerReadbackRequired,
+                        Text = active.Text
+                    });
+                }
+
                 if (!string.IsNullOrEmpty(active.Response.Text))
                 {
                     if (acknowledgements == null)
@@ -648,6 +658,10 @@ namespace RadioChatter.Audio
                 string towerReadback = TowerReadbackFor(text);
                 if (!string.IsNullOrEmpty(towerReadback))
                 {
+                    TowerReadbackExpectation ignored;
+                    if (SpokenTowerReadbacksEnabled() && TowerReadbackMatcher.TryCreate(text, out ignored))
+                        return default;
+
                     return new PendingAcknowledgement
                     {
                         Role = RadioRole.PlayerTower,
@@ -666,6 +680,22 @@ namespace RadioChatter.Audio
                 Text = PickAcknowledgement(),
                 IsReadback = false
             };
+        }
+
+        private bool RequiresSpokenTowerReadback(ReadyClip clip)
+        {
+            if (clip.Role != RadioRole.Tower || !SpokenTowerReadbacksEnabled())
+                return false;
+
+            TowerReadbackExpectation ignored;
+            return TowerReadbackMatcher.TryCreate(clip.Text, out ignored);
+        }
+
+        private bool SpokenTowerReadbacksEnabled()
+        {
+            return _config != null &&
+                   _config.VoiceCommandsEnabled.Value &&
+                   _config.VoiceRequireTowerReadbacks.Value;
         }
 
         private static string TowerReadbackFor(string text)
@@ -1028,6 +1058,7 @@ namespace RadioChatter.Audio
             public AudioSource Source;
             public string Text;
             public PendingAcknowledgement Response;
+            public bool RequiresSpokenReadback;
         }
 
         private struct SubtitleLine

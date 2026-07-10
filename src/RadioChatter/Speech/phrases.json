@@ -23,8 +23,8 @@
     "{callsign}, {awacs}, new contact{bearing_clause}, range {range}{altitude_clause}, {aspect}"
   ],
   "awacs_missile": [
-    "defend, defend, missile inbound bearing {bearing}",
-    "{callsign}, missile inbound, defend, bearing {bearing}"
+    "defend, defend, missile inbound bearing {bearing}, {break}",
+    "{callsign}, missile inbound, bearing {bearing}, {break}, defend"
   ],
   "awacs_splash_air": [
     "splash one, {type} down",
@@ -57,6 +57,18 @@
   "tower_continue_inbound": [
     "{callsign}, tower, you are {range} out, continue inbound, report approach",
     "{callsign}, tower, continue inbound, {range} to the field"
+  ],
+  "tower_readback_incorrect": [
+    "{callsign}, tower, readback incorrect, say again",
+    "{callsign}, tower, incorrect readback, repeat the full instruction"
+  ],
+  "tower_readback_missing": [
+    "{callsign}, tower, no readback received, read back {instruction}",
+    "{callsign}, tower, readback required, say again {instruction}"
+  ],
+  "tower_readback_failed": [
+    "{callsign}, tower, no valid readback received, {outcome}",
+    "{callsign}, tower, unable to obtain valid readback, {outcome}"
   ],
   "awacs_picture_clean": [
     "{callsign}, {awacs}, picture clean",

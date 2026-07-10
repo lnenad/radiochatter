@@ -30,6 +30,8 @@ namespace RadioChatter.Comms
         private const float PlayerGunsDuplicateSeconds = 5f;
         private const float PlayerWeaponReleaseSeconds = 2f;
         private const float PlayerDefensiveDuplicateSeconds = 6f;
+        private const float MissileInterruptDebounceSeconds = 2.5f;
+        private const float MissileRoutineSuppressSeconds = 8f;
         private const float StartupWingmanHoldFallbackSeconds = 10f;
         private const float StartupWingmanTakeoffReadbackMaxHoldSeconds = 65f;
         private const int MaxHeldStartupWingmanLines = 8;
@@ -50,6 +52,8 @@ namespace RadioChatter.Comms
         private const int MaxTransmissionsPerTick = 4;
         private const int VoiceResponsePriority = 60;
         private const float VoiceResponseDuplicateWindowSeconds = 2f;
+        private const float TowerReadbackResponseSeconds = 10f;
+        private const int TowerReadbackMaxAttempts = 2;
 
         private readonly Config _config;
         private readonly IRadioOutput _output;
@@ -70,6 +74,7 @@ namespace RadioChatter.Comms
         private readonly List<string> _stalePlayerWeaponCalls = new List<string>(8);
         private readonly List<string> _startupWingmanTexts = new List<string>(MaxHeldStartupWingmanLines);
         private readonly List<PendingTransmission> _startupAwacsTransmissions = new List<PendingTransmission>(MaxHeldStartupAwacsLines);
+        private readonly List<PendingTowerReadback> _pendingTowerReadbacks = new List<PendingTowerReadback>(3);
 
         private int _aircraftInstanceId;
         private int _homeAirbaseInstanceId;
@@ -103,6 +108,8 @@ namespace RadioChatter.Comms
         private float _rtbLastInboundAt = float.NaN;
         private float _nextSnapshotLogTime;
         private float _suppressPictureUntil;
+        private float _suppressRoutineAwacsUntil;
+        private float _lastMissileWarnAt = float.NegativeInfinity;
         private bool _sessionActive;
 
         public CommsDirector(Config config, IRadioOutput output, ManualLogSource log)
@@ -142,6 +149,9 @@ namespace RadioChatter.Comms
             }
 
             _sessionActive = true;
+            if (!SpokenTowerReadbacksEnabled())
+                _pendingTowerReadbacks.Clear();
+
             DrainPatchedEvents(snapshot);
 
             if (_aircraftInstanceId != snapshot.Player.AircraftInstanceId)
@@ -219,18 +229,7 @@ namespace RadioChatter.Comms
 
                     case RadioEventType.MissileThreat:
                         if (evt.SubjectId != 0 && _warnedMissiles.Add(evt.SubjectId))
-                        {
-                            if (_config.PlayerDefensiveCalls.Value)
-                                QueueText(RadioRole.Player, RadioEventType.PlayerDefensiveCall, "missile, break",
-                                    now, 100, 2.5f, 0f, true, PlayerDefensiveDuplicateSeconds);
-
-                            if (_config.MissileWarnings.Value)
-                            {
-                                Queue(RadioRole.Awacs, evt.Type, "awacs_missile", Slots(
-                                    "callsign", _config.PlayerCallsign.Value,
-                                    "bearing", NumberSpeech.Bearing(evt.BearingDeg)), now, 100, 3f, 0f, true);
-                            }
-                        }
+                            AnnounceMissileThreat(snapshot, evt.BearingDeg, now);
                         break;
 
                     case RadioEventType.SortieSuccessful:
@@ -282,6 +281,15 @@ namespace RadioChatter.Comms
                         }
                         break;
 
+                    case RadioEventType.TowerReadbackRequired:
+                        if (SpokenTowerReadbacksEnabled() &&
+                            TowerReadbackMatcher.TryCreate(evt.Text, out TowerReadbackExpectation expectation))
+                        {
+                            AddPendingTowerReadback(expectation, now);
+                            _log.LogInfo($"Awaiting spoken Tower {expectation.Kind.ToString().ToLowerInvariant()} readback from {expectation.Callsign}.");
+                        }
+                        break;
+
                     case RadioEventType.PlayerWeaponCall:
                         if (_config.PlayerWeaponCalls.Value && snapshot.InMission && snapshot.Player.Valid)
                         {
@@ -301,6 +309,7 @@ namespace RadioChatter.Comms
             }
 
             ReleaseStalePlayerWeaponCalls(snapshot.Time);
+            PromptForMissingTowerReadbacks(snapshot.Time);
         }
 
         private bool SuppressHeldPlayerWeaponCall(string text, float now)
@@ -385,17 +394,46 @@ namespace RadioChatter.Comms
                 if (threat.Id == 0 || !_warnedMissiles.Add(threat.Id))
                     continue;
 
-                if (_config.PlayerDefensiveCalls.Value)
-                    QueueText(RadioRole.Player, RadioEventType.PlayerDefensiveCall, "missile! break!",
-                        snapshot.Time, 100, 2.5f, 0f, true, PlayerDefensiveDuplicateSeconds);
-
-                if (_config.MissileWarnings.Value)
-                {
-                    Queue(RadioRole.Awacs, RadioEventType.MissileThreat, "awacs_missile", Slots(
-                        "callsign", _config.PlayerCallsign.Value,
-                        "bearing", NumberSpeech.Bearing(threat.BearingFromPlayerDeg)), snapshot.Time, 100, 3f, 0f, true);
-                }
+                AnnounceMissileThreat(snapshot, threat.BearingFromPlayerDeg, snapshot.Time);
             }
+        }
+
+        /// <summary>Announces a fresh missile threat with top priority. A live missile trumps
+        /// routine chatter, so whatever AWACS/tower call is mid-transmission is cut off and the
+        /// pending queue is purged (the calls below are urgent) before the warning goes out.
+        /// Closely-spaced launches queue behind one another instead of stomping the last warning.</summary>
+        private void AnnounceMissileThreat(Snapshot snapshot, float missileBearingDeg, float now)
+        {
+            if (now - _lastMissileWarnAt > MissileInterruptDebounceSeconds)
+                _output.StopAll();
+
+            _lastMissileWarnAt = now;
+
+            // Keep routine AWACS info (vector/picture) quiet through the immediate defensive moment.
+            _suppressRoutineAwacsUntil = Mathf.Max(_suppressRoutineAwacsUntil, now + MissileRoutineSuppressSeconds);
+            _suppressPictureUntil = Mathf.Max(_suppressPictureUntil, now + MissileRoutineSuppressSeconds);
+
+            string breakCall = EscapeBreakCall(missileBearingDeg, snapshot.Player.HeadingDeg);
+
+            if (_config.PlayerDefensiveCalls.Value)
+                QueueText(RadioRole.Player, RadioEventType.PlayerDefensiveCall, "missile, " + breakCall + "!",
+                    now, 100, 2.5f, 0f, true, PlayerDefensiveDuplicateSeconds);
+
+            if (_config.MissileWarnings.Value)
+                Queue(RadioRole.Awacs, RadioEventType.MissileThreat, "awacs_missile", Slots(
+                    "callsign", _config.PlayerCallsign.Value,
+                    "bearing", NumberSpeech.Bearing(missileBearingDeg),
+                    "break", breakCall), now, 100, 3f, 0f, true);
+        }
+
+        /// <summary>The defensive break to escape an incoming missile: turn to drive the threat onto
+        /// the 3/9 line (the beam) with the smaller turn. A threat ahead of the wingline is beamed by
+        /// breaking away from it; a threat behind the wingline by breaking toward its side.</summary>
+        private static string EscapeBreakCall(float missileBearingDeg, float playerHeadingDeg)
+        {
+            float relative = Mathf.DeltaAngle(playerHeadingDeg, missileBearingDeg); // + = threat to the right
+            bool breakRight = relative >= 0f ? relative > 90f : relative > -90f;
+            return breakRight ? "break right" : "break left";
         }
 
         private void DetectEjection(Snapshot snapshot)
@@ -598,7 +636,13 @@ namespace RadioChatter.Comms
             if (HasQueuedTransmission(RadioEventType.TowerTakeoff))
                 return true;
 
+            if (SpokenTowerReadbacksEnabled() && HasQueuedTransmission(RadioRole.Tower))
+                return true;
+
             if (_output.HasAudioWork(RadioRole.Tower))
+                return true;
+
+            if (SpokenTowerReadbacksEnabled() && HasPendingTowerReadback(TowerReadbackKind.Takeoff))
                 return true;
 
             return _config.PlayerAcknowledgements.Value && _output.HasAudioWork(RadioRole.PlayerTower);
@@ -619,7 +663,12 @@ namespace RadioChatter.Comms
             if (HasQueuedTransmission(RadioEventType.TowerAirborne))
                 return true;
 
-            return _output.HasAudioWork(RadioRole.Tower) || _output.HasAudioWork(RadioRole.PlayerTower);
+            if (SpokenTowerReadbacksEnabled() && HasQueuedTransmission(RadioRole.Tower))
+                return true;
+
+            return _output.HasAudioWork(RadioRole.Tower) ||
+                   _output.HasAudioWork(RadioRole.PlayerTower) ||
+                   (SpokenTowerReadbacksEnabled() && HasPendingTowerReadback(TowerReadbackKind.Handoff));
         }
 
         private bool HasQueuedTransmission(RadioEventType type)
@@ -757,6 +806,11 @@ namespace RadioChatter.Comms
         private bool RequestDrivenComms()
         {
             return _config.VoiceCommandsEnabled.Value && _config.VoiceRequestDriven.Value;
+        }
+
+        private bool SpokenTowerReadbacksEnabled()
+        {
+            return _config.VoiceCommandsEnabled.Value && _config.VoiceRequireTowerReadbacks.Value;
         }
 
         private void DetectTower(Snapshot snapshot)
@@ -935,6 +989,9 @@ namespace RadioChatter.Comms
             if (!_config.VectorToTargetCalls.Value || !snapshot.HasSelectedTarget || RequestDrivenComms())
                 return;
 
+            if (snapshot.Time < _suppressRoutineAwacsUntil)
+                return;
+
             float rangeM = GPos.Distance2D(snapshot.Player.Position, snapshot.SelectedTarget.Position);
             if (rangeM <= VectorSuppressDistanceM)
                 return;
@@ -947,7 +1004,7 @@ namespace RadioChatter.Comms
             if (!_config.PictureUpdateCalls.Value || snapshot.Contacts.Count == 0 || RequestDrivenComms())
                 return;
 
-            if (snapshot.Time < _suppressPictureUntil)
+            if (snapshot.Time < _suppressPictureUntil || snapshot.Time < _suppressRoutineAwacsUntil)
                 return;
 
             // The vector call owns the selected target; picture covers the remaining threats.
@@ -970,6 +1027,9 @@ namespace RadioChatter.Comms
 
             if (text.Length > 0 && _config.VoiceShowRecognizedText.Value)
                 _output.ShowSubtitle(RadioRole.Player, text, 4f);
+
+            if (TryHandleTowerReadback(text, intent, now))
+                return;
 
             // Radio discipline: a proper call is "<station>, [this is] <callsign>, <request>".
             // A malformed call gets a corrective reply instead of an answer.
@@ -1029,6 +1089,156 @@ namespace RadioChatter.Comms
             }
         }
 
+        private bool TryHandleTowerReadback(string text, VoiceIntent intent, float now)
+        {
+            if (!SpokenTowerReadbacksEnabled() || _pendingTowerReadbacks.Count == 0)
+                return false;
+
+            for (int i = 0; i < _pendingTowerReadbacks.Count; i++)
+            {
+                TowerReadbackExpectation expectation = _pendingTowerReadbacks[i].Expectation;
+                if (!TowerReadbackMatcher.IsMatch(text, expectation))
+                    continue;
+
+                _pendingTowerReadbacks.RemoveAt(i);
+                _log.LogInfo($"Accepted spoken Tower {expectation.Kind.ToString().ToLowerInvariant()} readback: \"{text}\"");
+                return true;
+            }
+
+            // A command explicitly sent to AWACS remains an AWACS command even while Tower is
+            // waiting. Otherwise only readback-like speech (or a Tower-addressed transmission)
+            // is intercepted, so unrelated unaddressed commands retain their existing behavior.
+            if (intent.Station == VoiceStation.Awacs)
+                return false;
+
+            PendingTowerReadback pendingReadback = _pendingTowerReadbacks[0];
+            TowerReadbackExpectation pending = pendingReadback.Expectation;
+            if (intent.Station != VoiceStation.Tower && !TowerReadbackMatcher.LooksLikeAttempt(text, pending))
+                return false;
+
+            HandleFailedTowerReadback(0, now, true, text);
+            return true;
+        }
+
+        private void AddPendingTowerReadback(TowerReadbackExpectation expectation, float now)
+        {
+            for (int i = _pendingTowerReadbacks.Count - 1; i >= 0; i--)
+            {
+                if (_pendingTowerReadbacks[i].Expectation.Kind == expectation.Kind)
+                    _pendingTowerReadbacks.RemoveAt(i);
+            }
+
+            _pendingTowerReadbacks.Add(new PendingTowerReadback
+            {
+                Expectation = expectation,
+                AwaitingSince = now
+            });
+        }
+
+        private bool HasPendingTowerReadback(TowerReadbackKind kind)
+        {
+            for (int i = 0; i < _pendingTowerReadbacks.Count; i++)
+            {
+                if (_pendingTowerReadbacks[i].Expectation.Kind == kind)
+                    return true;
+            }
+
+            return false;
+        }
+
+        private void PromptForMissingTowerReadbacks(float now)
+        {
+            if (!SpokenTowerReadbacksEnabled())
+                return;
+
+            for (int i = _pendingTowerReadbacks.Count - 1; i >= 0; i--)
+            {
+                PendingTowerReadback pending = _pendingTowerReadbacks[i];
+                if (now - pending.AwaitingSince < TowerReadbackResponseSeconds)
+                    continue;
+
+                HandleFailedTowerReadback(i, now, false, null);
+            }
+        }
+
+        private void HandleFailedTowerReadback(int index, float now, bool incorrect, string transcript)
+        {
+            PendingTowerReadback pending = _pendingTowerReadbacks[index];
+            TowerReadbackExpectation expectation = pending.Expectation;
+            pending.FailedAttempts++;
+
+            if (pending.FailedAttempts >= TowerReadbackMaxAttempts)
+            {
+                _pendingTowerReadbacks.RemoveAt(index);
+                ApplyFailedReadbackState(expectation.Kind);
+
+                Dictionary<string, string> finalSlots = VoiceSlots(expectation.Callsign);
+                finalSlots["outcome"] = FailedReadbackOutcome(expectation.Kind);
+                QueueVoiceResponse(RadioRole.Tower, RadioEventType.VoiceCommandResponse,
+                    "tower_readback_failed", finalSlots, now);
+
+                _log.LogInfo($"Tower stopped waiting for {expectation.Kind.ToString().ToLowerInvariant()} readback after {TowerReadbackMaxAttempts} failed attempts.");
+                return;
+            }
+
+            Dictionary<string, string> slots = VoiceSlots(expectation.Callsign);
+            if (incorrect)
+            {
+                QueueVoiceResponse(RadioRole.Tower, RadioEventType.VoiceCommandResponse,
+                    "tower_readback_incorrect", slots, now);
+                _log.LogInfo($"Rejected incomplete Tower {expectation.Kind.ToString().ToLowerInvariant()} readback: \"{transcript}\"");
+            }
+            else
+            {
+                slots["instruction"] = ReadbackInstruction(expectation.Kind);
+                QueueVoiceResponse(RadioRole.Tower, RadioEventType.VoiceCommandResponse,
+                    "tower_readback_missing", slots, now);
+                _log.LogInfo($"Tower requested missing {expectation.Kind.ToString().ToLowerInvariant()} readback from {expectation.Callsign}.");
+            }
+
+            pending.AwaitingSince = now;
+            _pendingTowerReadbacks[index] = pending;
+        }
+
+        private void ApplyFailedReadbackState(TowerReadbackKind kind)
+        {
+            if (kind == TowerReadbackKind.Landing)
+            {
+                _finalAnnounced = false;
+                _approachAnnounced = false;
+            }
+        }
+
+        private static string FailedReadbackOutcome(TowerReadbackKind kind)
+        {
+            switch (kind)
+            {
+                case TowerReadbackKind.Takeoff:
+                    return "cancel takeoff clearance, hold position";
+                case TowerReadbackKind.Landing:
+                    return "go around";
+                case TowerReadbackKind.Handoff:
+                    return "handoff unconfirmed, radio failure suspected";
+                default:
+                    return "radio failure suspected";
+            }
+        }
+
+        private static string ReadbackInstruction(TowerReadbackKind kind)
+        {
+            switch (kind)
+            {
+                case TowerReadbackKind.Takeoff:
+                    return "the takeoff clearance";
+                case TowerReadbackKind.Landing:
+                    return "the landing clearance";
+                case TowerReadbackKind.Handoff:
+                    return "the handoff instruction";
+                default:
+                    return "the instruction";
+            }
+        }
+
         private Dictionary<string, string> VoiceSlots(string callsign)
         {
             Dictionary<string, string> slots = CommonSlots();
@@ -1043,11 +1253,8 @@ namespace RadioChatter.Comms
             {
                 // A voice-granted clearance drives the same state as the automatic one, so the
                 // startup gate and the auto tower sequence stay consistent.
-                if (!_takeoffClearanceAnnounced)
-                {
-                    _takeoffClearanceAnnounced = true;
-                    _takeoffClearanceQueuedAt = now;
-                }
+                _takeoffClearanceAnnounced = true;
+                _takeoffClearanceQueuedAt = now;
 
                 Dictionary<string, string> slots = TowerSlots(home);
                 slots["callsign"] = callsign;
@@ -1612,6 +1819,8 @@ namespace RadioChatter.Comms
             ClearPlayerWeaponHoldState();
             _queue.Clear();
             _suppressPictureUntil = 0f;
+            _suppressRoutineAwacsUntil = 0f;
+            _lastMissileWarnAt = float.NegativeInfinity;
         }
 
         private void ResetForAircraft(int aircraftInstanceId)
@@ -1640,6 +1849,7 @@ namespace RadioChatter.Comms
             _startupMissionCommsSeen = false;
             _startupTakeoffSequenceDoneAt = float.NaN;
             _startupAwacsTransmissions.Clear();
+            _pendingTowerReadbacks.Clear();
             _previousHomeDistance = float.NaN;
             _approachInboundStartedAt = float.NaN;
             _approachLastInboundAt = float.NaN;
@@ -1650,6 +1860,8 @@ namespace RadioChatter.Comms
             ClearPlayerWeaponHoldState();
             _queue.Clear();
             _suppressPictureUntil = 0f;
+            _suppressRoutineAwacsUntil = 0f;
+            _lastMissileWarnAt = float.NegativeInfinity;
         }
 
         private void ClearPlayerWeaponHoldState()
@@ -1692,6 +1904,13 @@ namespace RadioChatter.Comms
             public float DisplaySeconds;
             public uint SubjectId;
             public bool BypassStartupHold;
+        }
+
+        private struct PendingTowerReadback
+        {
+            public TowerReadbackExpectation Expectation;
+            public float AwaitingSince;
+            public int FailedAttempts;
         }
 
         private enum ContactAspect

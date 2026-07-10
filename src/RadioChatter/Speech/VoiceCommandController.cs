@@ -229,7 +229,7 @@ namespace RadioChatter.Speech
         /// dramatically improve recognition of radio-speak on small models.</summary>
         private string BuildPrompt()
         {
-            return "Air traffic control radio. " +
+            string prompt = "Air traffic control radio. " +
                    _config.PlayerCallsign.Value + ". " +
                    _config.AwacsCallsign.Value + ". " +
                    "Tower, this is " + _config.PlayerCallsign.Value + ", requesting takeoff. " +
@@ -237,6 +237,15 @@ namespace RadioChatter.Speech
                    "Request picture. Bogey dope. Request vector to target. " +
                    "Vector to objective. Request objective list. " +
                    "Vector to home plate. Return to base. Radio check.";
+
+            if (_config.VoiceRequireTowerReadbacks.Value)
+            {
+                prompt += " Cleared for takeoff runway two seven, " + _config.PlayerCallsign.Value + "." +
+                          " Cleared to land runway two seven, " + _config.PlayerCallsign.Value + "." +
+                          " Switching " + _config.AwacsCallsign.Value + ", " + _config.PlayerCallsign.Value + ".";
+            }
+
+            return prompt;
         }
 
         private static string PostTranscribe(string url, byte[] wav, string prompt)

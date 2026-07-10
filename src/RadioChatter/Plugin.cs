@@ -119,6 +119,7 @@ namespace RadioChatter
         // Voice commands
         public readonly ConfigEntry<bool> VoiceCommandsEnabled;
         public readonly ConfigEntry<bool> VoiceRequireProperCalls;
+        public readonly ConfigEntry<bool> VoiceRequireTowerReadbacks;
         public readonly ConfigEntry<bool> VoiceRequestDriven;
         public readonly ConfigEntry<KeyCode> VoicePushToTalkKey;
         public readonly ConfigEntry<string> VoiceMicrophoneDevice;
@@ -185,6 +186,8 @@ namespace RadioChatter
                 "Push-to-talk voice commands: request takeoff/landing clearance, AWACS picture, vectors, radio check. Needs a microphone; speech is transcribed locally by the sidecar.");
             VoiceRequireProperCalls = f.Bind("VoiceCommands", "RequireProperCalls", true,
                 "Require proper radio format: station, callsign, request — e.g. \"Tower, Falcon 1-1, request takeoff\" or \"Overwatch, this is Falcon 1-1, request picture\". Improper calls get a corrective reply instead of an answer.");
+            VoiceRequireTowerReadbacks = f.Bind("VoiceCommands", "RequireTowerReadbacks", false,
+                "Require the player to speak proper readbacks for Tower takeoff/landing clearances and airborne handoffs. The readback must include the instruction, callsign, and any assigned runway or handoff station. Tower allows two response attempts before ending the exchange with an appropriate cancellation/go-around/failure call. Replaces automatic synthesized Tower readbacks while voice commands are enabled.");
             VoiceRequestDriven = f.Bind("VoiceCommands", "RequestDriven", true,
                 "Comms are request-driven: tower clearances (takeoff, approach, landing) and AWACS picture/vector info must be requested by voice. AWACS still calls out new contacts, missile threats, splashes, and bingo fuel automatically. Off = everything is announced automatically, as before voice commands existed. Only applies while voice commands are enabled.");
             VoicePushToTalkKey = f.Bind("VoiceCommands", "PushToTalkKey", KeyCode.RightAlt,

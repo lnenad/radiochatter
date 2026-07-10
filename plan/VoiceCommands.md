@@ -228,6 +228,16 @@ All implemented, built (0 warnings), deployed, and verified:
   their 10 s fallback, and `_takeoffClearanceAnnounced` stays false when suppressed so a
   later voice request works and gate logic sees takeoff as pending. Off (or voice commands
   disabled) = fully automatic pre-voice behavior.
+- **Required spoken Tower readbacks** (`Config.VoiceRequireTowerReadbacks`,
+  `"RequireTowerReadbacks"`, default false): while voice commands are enabled, takeoff and
+  landing clearances plus the airborne handoff no longer synthesize a `[PLAYER-TWR]` response.
+  After the Tower audio actually finishes, the player must use PTT to repeat the instruction,
+  callsign, and any assigned runway or handoff station. Incorrect/incomplete attempts get an
+  explicit `readback incorrect` and repeat request. Ten seconds without a response consumes an
+  attempt and gets a `no readback received` prompt. After two failed response windows, Tower
+  stops waiting and issues the type-specific terminal call (cancel takeoff/hold position, go
+  around, or unconfirmed handoff/radio failure). The pending readback participates in the
+  existing startup Tower/wingman/AWACS gate; disabling the flag restores automatic readbacks.
 
 Verification:
 - Parser suite (scratchpad `parsertest`, compiles `VoiceIntentParser.cs` standalone):
