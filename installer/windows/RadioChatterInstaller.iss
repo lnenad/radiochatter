@@ -6,6 +6,16 @@
 #define PayloadDir "..\..\dist\github\payload"
 #endif
 
+#ifndef OutputDir
+#define OutputDir "..\..\dist"
+#endif
+
+#ifdef BundledModels
+#define InstallerSuffix "Setup-WithModels"
+#else
+#define InstallerSuffix "Setup"
+#endif
+
 [Setup]
 AppId={{8F4C7C7B-2D2F-4B7A-A90E-2FA01DAB4AF0}
 AppName=RadioChatter
@@ -19,8 +29,8 @@ AppendDefaultDirName=no
 DisableDirPage=no
 UsePreviousAppDir=no
 DisableProgramGroupPage=yes
-OutputDir=..\..\dist
-OutputBaseFilename=RadioChatter-{#AppVersion}-Setup
+OutputDir={#OutputDir}
+OutputBaseFilename=RadioChatter-{#AppVersion}-{#InstallerSuffix}
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
@@ -31,11 +41,22 @@ SetupLogging=yes
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
-Name: "prepare_sidecar"; Description: "Prepare Pocket TTS sidecar now (requires internet; a private Python is downloaded automatically if none is installed)"; Flags: unchecked
+#ifdef BundledModels
+Name: "prepare_sidecar"; Description: "Prepare voice sidecar dependencies now (models are bundled; internet may still be needed for Python packages)"; Flags: unchecked
+#else
+Name: "prepare_sidecar"; Description: "Prepare voice sidecar now (requires internet for Python packages and model downloads)"; Flags: unchecked
+#endif
 
 [Files]
 Source: "{#PayloadDir}\RadioChatter.dll"; DestDir: "{app}\BepInEx\plugins\RadioChatter"; Flags: ignoreversion
-Source: "{#PayloadDir}\sidecar\*"; DestDir: "{app}\BepInEx\plugins\RadioChatter\sidecar"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#PayloadDir}\sidecar\server.py"; DestDir: "{app}\BepInEx\plugins\RadioChatter\sidecar"; Flags: ignoreversion
+Source: "{#PayloadDir}\sidecar\requirements.txt"; DestDir: "{app}\BepInEx\plugins\RadioChatter\sidecar"; Flags: ignoreversion
+Source: "{#PayloadDir}\sidecar\voices.json"; DestDir: "{app}\BepInEx\plugins\RadioChatter\sidecar"; Flags: ignoreversion
+Source: "{#PayloadDir}\sidecar\run_sidecar.bat"; DestDir: "{app}\BepInEx\plugins\RadioChatter\sidecar"; Flags: ignoreversion
+Source: "{#PayloadDir}\sidecar\run_sidecar.sh"; DestDir: "{app}\BepInEx\plugins\RadioChatter\sidecar"; Flags: ignoreversion
+#ifdef BundledModels
+Source: "{#PayloadDir}\sidecar\cache\*"; DestDir: "{localappdata}\RadioChatter\cache"; Flags: ignoreversion recursesubdirs createallsubdirs
+#endif
 
 [Run]
 Filename: "{cmd}"; Parameters: "/C """"{app}\BepInEx\plugins\RadioChatter\sidecar\run_sidecar.bat"" --install-only"""; WorkingDir: "{app}\BepInEx\plugins\RadioChatter\sidecar"; Description: "Prepare Pocket TTS sidecar"; StatusMsg: "Preparing Pocket TTS sidecar. This can take several minutes on first install..."; Flags: postinstall runascurrentuser skipifsilent waituntilterminated; Tasks: prepare_sidecar

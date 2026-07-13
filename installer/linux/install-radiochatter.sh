@@ -91,6 +91,11 @@ for name in server.py requirements.txt voices.json run_sidecar.bat run_sidecar.s
         cp "$SIDECAR_SRC/$name" "$SIDECAR_DIR/$name"
     fi
 done
+if [ -d "$SIDECAR_SRC/cache" ]; then
+    echo "Installing bundled voice models..."
+    mkdir -p "$SIDECAR_DIR/cache"
+    cp -R "$SIDECAR_SRC/cache/." "$SIDECAR_DIR/cache/"
+fi
 chmod +x "$SIDECAR_DIR/run_sidecar.sh" 2>/dev/null || true
 
 echo "Installed RadioChatter to $PLUGIN_DIR"
@@ -98,7 +103,11 @@ echo "Installed RadioChatter to $PLUGIN_DIR"
 if [ "$SKIP_SIDECAR_INSTALL" -eq 0 ]; then
     SHOULD_INSTALL="$ASSUME_YES"
     if [ "$SHOULD_INSTALL" -eq 0 ] && [ -t 0 ]; then
-        printf 'Prepare Pocket TTS sidecar now? This needs Python 3.10+ and internet. [Y/n] '
+        if [ -f "$SIDECAR_DIR/cache/MODEL_BUNDLE.json" ]; then
+            printf 'Prepare voice sidecar dependencies now? Models are bundled; Python packages may need internet. [Y/n] '
+        else
+            printf 'Prepare voice sidecar now? This needs Python 3.10+ and internet for packages and models. [Y/n] '
+        fi
         IFS= read -r answer
         case "$answer" in
             n|N|no|NO|No) SHOULD_INSTALL=0 ;;

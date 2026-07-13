@@ -4,6 +4,7 @@ Local.props
 *.user
 sidecar/voices/
 sidecar/__pycache__/
+tools/__pycache__/
 sidecar/.venv/
 sidecar/cache/
 sidecar/uv/

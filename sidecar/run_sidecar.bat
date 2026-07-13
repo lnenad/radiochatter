@@ -53,6 +53,13 @@ if /I not "%RC_CACHE_HOME%"=="%~dp0cache" if exist "%~dp0cache\" (
     echo Moving the model cache out of the game folder to "%RC_CACHE_HOME%"...
     robocopy "%~dp0cache" "%RC_CACHE_HOME%" /E /MOVE /NFL /NDL /NJH /NJS >nul 2>nul
 )
+rem The with-models installer places a verified marker beside its complete cache.
+rem Force that cache and offline Hub resolution so startup never attempts a model download.
+if exist "%RC_CACHE_HOME%\MODEL_BUNDLE.json" (
+    set "HF_HOME=%RC_CACHE_HOME%\huggingface"
+    set "HF_HUB_OFFLINE=1"
+    echo Using bundled RadioChatter voice models; Hugging Face is offline.
+)
 if not defined UV_CACHE_DIR set "UV_CACHE_DIR=%RC_UV_HOME%\cache"
 
 rem Without these, a wedged HuggingFace connection can hang the model load forever
@@ -189,9 +196,9 @@ goto install_deps
 call :validate_python
 if errorlevel 1 exit /b %errorlevel%
 if defined INSTALL_ONLY goto install_deps
-"%PYTHON_EXE%" -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('pocket_tts') and importlib.util.find_spec('numpy') and importlib.util.find_spec('faster_whisper') else 1)" >nul 2>nul
+"%PYTHON_EXE%" -c "import importlib.metadata as m, importlib.util, sys; sys.exit(0 if importlib.util.find_spec('pocket_tts') and importlib.util.find_spec('numpy') and importlib.util.find_spec('faster_whisper') and m.version('pocket-tts') == '2.1.0' and m.version('faster-whisper') == '1.2.1' else 1)" >nul 2>nul
 if errorlevel 1 (
-    echo RadioChatter sidecar dependencies are missing; installing now...
+    echo RadioChatter sidecar dependencies are missing or outdated; installing now...
     goto install_deps
 )
 goto run

@@ -43,9 +43,27 @@ jobs:
           if (!(Test-Path release/payload/sidecar/run_sidecar.bat)) { throw "release/payload/sidecar/run_sidecar.bat is missing." }
           if (!(Test-Path release/payload/sidecar/run_sidecar.sh)) { throw "release/payload/sidecar/run_sidecar.sh is missing." }
 
+      - name: Restore bundled model cache
+        id: model-cache
+        uses: actions/cache@v4
+        with:
+          path: dist/model-cache
+          key: radiochatter-model-bundle-${{ hashFiles('tools/prepare_model_bundle.py', 'installer/models/MODEL_LICENSES.txt') }}
+
+      - name: Install model download helper
+        if: steps.model-cache.outputs.cache-hit != 'true'
+        run: python -m pip install huggingface-hub==1.22.0
+
+      - name: Prepare bundled model cache
+        if: steps.model-cache.outputs.cache-hit != 'true'
+        run: python tools/prepare_model_bundle.py --output dist/model-cache
+
+      - name: Verify bundled model cache
+        run: python tools/prepare_model_bundle.py --output dist/model-cache --verify-only
+
       - name: Build installers from prebuilt payload
         shell: powershell
-        run: python tools/package_github_release.py --skip-build --payload-source release/payload --version "${{ inputs.tag || github.ref_name }}"
+        run: python tools/package_github_release.py --skip-build --payload-source release/payload --model-cache dist/model-cache --version "${{ inputs.tag || github.ref_name }}"
 
       - name: Upload GitHub release assets
         uses: softprops/action-gh-release@v2
@@ -54,4 +72,6 @@ jobs:
           fail_on_unmatched_files: true
           files: |
             dist/RadioChatter-*-Setup.exe
+            dist/RadioChatter-*-Setup-WithModels.exe
             dist/RadioChatter-*-linux.zip
+            dist/RadioChatter-*-linux-with-models.zip

@@ -27,7 +27,12 @@ fi
 if [ -z "${UV_CACHE_DIR:-}" ]; then
     UV_CACHE_DIR="$SCRIPT_DIR/cache/uv"
 fi
-export HF_HOME TORCH_HOME HF_HUB_DISABLE_SYMLINKS_WARNING HF_HUB_ETAG_TIMEOUT HF_HUB_DOWNLOAD_TIMEOUT UV_CACHE_DIR
+if [ -f "$SCRIPT_DIR/cache/MODEL_BUNDLE.json" ]; then
+    HF_HOME="$SCRIPT_DIR/cache/huggingface"
+    HF_HUB_OFFLINE=1
+    echo "Using bundled RadioChatter voice models; Hugging Face is offline."
+fi
+export HF_HOME TORCH_HOME HF_HUB_OFFLINE HF_HUB_DISABLE_SYMLINKS_WARNING HF_HUB_ETAG_TIMEOUT HF_HUB_DOWNLOAD_TIMEOUT UV_CACHE_DIR
 
 if [ -z "${PYTHON_EXE:-}" ] && [ -x "$SCRIPT_DIR/.venv/bin/python" ]; then
     PYTHON_EXE="$SCRIPT_DIR/.venv/bin/python"
@@ -114,9 +119,9 @@ if [ "$INSTALL_ONLY" -eq 1 ]; then
     exit 0
 fi
 
-# A pre-existing venv may predate newly added dependencies (e.g. faster-whisper).
-if ! "$PYTHON_EXE" -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('pocket_tts') and importlib.util.find_spec('numpy') and importlib.util.find_spec('faster_whisper') else 1)" >/dev/null 2>&1; then
-    echo "RadioChatter sidecar dependencies are missing; installing now..."
+# A pre-existing venv may predate or differ from the versions paired with the bundled cache.
+if ! "$PYTHON_EXE" -c "import importlib.metadata as m, importlib.util, sys; sys.exit(0 if importlib.util.find_spec('pocket_tts') and importlib.util.find_spec('numpy') and importlib.util.find_spec('faster_whisper') and m.version('pocket-tts') == '2.1.0' and m.version('faster-whisper') == '1.2.1' else 1)" >/dev/null 2>&1; then
+    echo "RadioChatter sidecar dependencies are missing or outdated; installing now..."
     "$PYTHON_EXE" -m pip install --upgrade pip
     "$PYTHON_EXE" -m pip install -r requirements.txt
 fi

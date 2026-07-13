@@ -153,39 +153,46 @@ mod disables itself rather than read state it does not own.
    HideGameManagerObject = true
    ```
 
-3. Internet access on first run — the sidecar downloads the Pocket TTS voice model
-   (~235 MB). Python is *not* required: if no Python 3.10+ is found, the launcher
-   automatically downloads [uv](https://github.com/astral-sh/uv) and a private,
-   self-contained Python 3.12 into the mod's own folder.
+3. Internet access for Python dependencies. The standard/lightweight downloads also fetch the
+   Pocket TTS model (~235 MB) and faster-whisper `base.en` model (~148 MB) on first run. The
+   separate **WithModels** downloads include both models and never contact Hugging Face at
+   runtime. Python is *not* required: if no Python 3.10+ is found, the launcher automatically
+   downloads [uv](https://github.com/astral-sh/uv) and a private, self-contained Python 3.12.
 
 ### Windows
 
-1. Download `RadioChatter-<version>-Setup.exe` from the
-   [latest release](https://github.com/lnenad/radiochatter/releases/latest).
+1. Download one Windows installer from the
+   [latest release](https://github.com/lnenad/radiochatter/releases/latest):
+   - `RadioChatter-<version>-Setup.exe` — small download; models download on first run.
+   - `RadioChatter-<version>-Setup-WithModels.exe` — larger download with TTS and STT models
+     included; no Hugging Face/model download is needed.
 2. Close Nuclear Option and run the installer.
 3. Select your Nuclear Option game folder.
-4. Leave *Prepare Pocket TTS sidecar now* checked to set up the voice environment immediately
-   (needs internet for the first model download). If this step fails, check
+4. Leave *Prepare voice sidecar dependencies now* checked to set up the Python environment
+   immediately. This can still need internet for Python packages even in the WithModels build;
+   the WithModels build does not download model weights. If this step fails, check
    `BepInEx\plugins\RadioChatter\sidecar\sidecar-install.log` and rerun
    `BepInEx\plugins\RadioChatter\sidecar\run_sidecar.bat --install-only`.
 
 ### Linux
 
-Download `RadioChatter-<version>-linux.zip` from the
+Download either `RadioChatter-<version>-linux.zip` (lightweight) or
+`RadioChatter-<version>-linux-with-models.zip` (TTS and STT models included) from the
 [latest release](https://github.com/lnenad/radiochatter/releases/latest), then:
 
 ```sh
-unzip RadioChatter-<version>-linux.zip
+unzip RadioChatter-<version>-linux-with-models.zip
 sh install-radiochatter.sh --game-dir "$HOME/.steam/steam/steamapps/common/Nuclear Option" --yes
 ```
 
 ### First run
 
 The plugin auto-starts the sidecar. If the sidecar environment was not prepared during
-install, the launcher creates `BepInEx/plugins/RadioChatter/sidecar/.venv`, installs the
-Python dependencies, and downloads the Pocket TTS model — the first startup can take several
-minutes. Subsequent startups take a few seconds. Until the sidecar is up, the mod shows
-subtitles only.
+install, the launcher creates `BepInEx/plugins/RadioChatter/sidecar/.venv` and installs the
+Python dependencies. Lightweight installs then download both models, so their first startup can
+take several minutes. WithModels installs detect `MODEL_BUNDLE.json`, force Hugging Face offline,
+and load the packaged models directly. Subsequent startups take a few seconds. Until the sidecar
+is up, the mod shows subtitles only.
 
 A small status indicator in the bottom-right corner tracks voice readiness — *connecting*,
 *starting sidecar*, *downloading voice model* (first run only), *loading TTS model*,
@@ -558,6 +565,7 @@ player acknowledgement.
 | Sidecar says `pocket-tts is not installed` | Python environment is missing dependencies or a previous install was interrupted. | Run `sidecar\run_sidecar.bat --install-only`; check `sidecar\sidecar-install.log` and `sidecar\sidecar-pip.log` if it fails. |
 | Sidecar starts slowly | Pocket TTS model is loading or downloading. | Wait for `RadioChatter Pocket TTS sidecar listening...`. |
 | Auto-started sidecar never comes online (python running, no CPU) | A stalled HuggingFace connection hung the model load. | The sidecar launchers set `HF_HUB_ETAG_TIMEOUT`/`HF_HUB_DOWNLOAD_TIMEOUT` and `server.py` retries with `HF_HUB_OFFLINE=1`, so this should self-recover; if a python process is stuck from an older version, stop it and start the sidecar again. |
+| Model download repeatedly fails | Hugging Face is unavailable, blocked, or unreliable on the connection. | Install the matching `Setup-WithModels.exe` or `linux-with-models.zip` release. It packages both required models and forces offline model resolution. Python packages may still require internet during sidecar setup. |
 | Wrong voice for a role | Plugin voice alias and `voices.json` do not match. | Update `Audio.*Voice` config or `sidecar\voices.json`, then restart the sidecar. |
 | Radio speaks raw keys like `awacs_rtb_fuel` | `phrases.json` failed to load, or a loose override is malformed or missing that key. | Check the BepInEx log for the phrase-bank error; fix or delete `BepInEx\plugins\RadioChatter\phrases.json`. |
 | Player weapon call is wrong | Weapon classification heuristic needs tuning for that Nuclear Option weapon. | Check the `Player weapon call:` log entry and update the mapping in `WeaponFirePatch`. |
@@ -677,6 +685,12 @@ Windows install attempts write
 `sidecar/sidecar-install.log` and pip details to `sidecar/sidecar-pip.log`. To prepare the
 environment manually from the repo root:
 
+The optional WithModels packages contain a verified `sidecar/cache` with the Pocket TTS English
+model, the configured Eve/Vera/George/Paul voice embeddings, and faster-whisper `base.en`. A
+`MODEL_BUNDLE.json` marker makes both launchers set `HF_HUB_OFFLINE=1`; Windows installs this
+cache under `%LOCALAPPDATA%\RadioChatter\cache` to avoid Steam path-length problems, while Linux
+keeps it under the sidecar. `MODEL_LICENSES.txt` contains the model attribution and license terms.
+
 ```powershell
 # Windows
 py -3.12 -m venv .venv-sidecar312
@@ -728,6 +742,7 @@ plan/                        original design notes and game API dump tooling
 tools/
   new_release_tag.ps1        builds the DLL and stages/commits/tags a release payload
   package_github_release.py  builds GitHub release assets (installer .exe + linux zip)
+  prepare_model_bundle.py    downloads/copies, hashes, and verifies the optional model cache
 src/RadioChatter/
   Plugin.cs                  BepInEx entry point + config
   RadioRuntime.cs            static wiring between patches and services
@@ -773,8 +788,10 @@ git push origin v0.1.0
 ```
 
 The script builds the DLL, copies it plus the sidecar files into `release/payload`, commits
-the payload, and creates the annotated tag. The `Release` workflow then compiles the Windows
-installer and the Linux zip from that payload and attaches both to the GitHub release.
+the payload, and creates the annotated tag. The `Release` workflow then creates four assets:
+the lightweight Windows installer and Linux zip plus matching `WithModels` variants. GitHub
+Actions downloads the two pinned model snapshots once, verifies every file hash, caches the
+result between releases, and embeds it only in the WithModels assets.
 
 Push the branch and the tag **separately**: pushing both refs in one command can make GitHub
 drop the tag push event, and the release workflow never triggers. If a tag was pushed without
@@ -782,9 +799,21 @@ triggering a run, either re-push it
 (`git push origin :refs/tags/v0.1.0 && git push origin v0.1.0`) or run the **Release**
 workflow manually from the Actions tab with the tag name.
 
-To build release assets locally, run `python tools/package_github_release.py` — the Linux zip
-is written to `dist/`, and the Windows wizard is compiled there too when Inno Setup 6 is
-installed. Use `--skip-build` if the Release DLL is already current.
+To build lightweight release assets locally, run `python tools/package_github_release.py` — the
+Linux zip is written to `dist/`, and the Windows wizard is compiled there too when Inno Setup 6
+is installed. Use `--skip-build` if the Release DLL is already current. To also build WithModels
+assets from an existing warm Windows cache:
+
+```powershell
+python tools/prepare_model_bundle.py `
+  --source-cache "$env:LOCALAPPDATA\RadioChatter\cache" `
+  --output dist/model-cache
+python tools/package_github_release.py --model-cache dist/model-cache
+```
+
+Omit `--source-cache` to download the pinned files with `huggingface-hub`. The preparation tool
+accepts only the expected Pocket TTS 2.1.0 / faster-whisper 1.2.1 files and revisions, verifies
+their sizes and SHA-256 hashes, and excludes unrelated user cache data and download logs.
 
 <details>
 <summary><strong>Manual test checklist</strong></summary>
@@ -848,5 +877,8 @@ API access behind `GameAdapter`/`Patches`.
   Studios — this is an unofficial fan-made mod, not affiliated with or endorsed by the
   developers.
 - [Pocket TTS](https://github.com/kyutai-labs/pocket-tts) by Kyutai Labs powers the voices.
+- Optional bundled weights remain under their upstream licenses: Kyutai's Pocket TTS model is
+  [CC BY 4.0](https://huggingface.co/kyutai/pocket-tts-without-voice-cloning), and SYSTRAN's
+  [faster-whisper base.en](https://huggingface.co/Systran/faster-whisper-base.en) is MIT.
 - [BepInEx](https://github.com/BepInEx/BepInEx) and [Harmony](https://github.com/pardeike/Harmony)
   make the modding possible.

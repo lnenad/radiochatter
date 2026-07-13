@@ -10,6 +10,8 @@ import zipfile
 from pathlib import Path
 from xml.etree import ElementTree
 
+from prepare_model_bundle import verify_bundle
+
 
 PACKAGE_NAME = "RadioChatter"
 
@@ -88,6 +90,17 @@ def stage_payload_from_source(source: Path, stage: Path) -> None:
     normalize_windows_batch_files(stage)
 
 
+def stage_payload_with_models(payload: Path, model_cache: Path, stage: Path) -> None:
+    model_cache = model_cache.resolve()
+    verify_bundle(model_cache)
+
+    if stage.exists():
+        shutil.rmtree(stage)
+    shutil.copytree(payload, stage)
+    shutil.copytree(model_cache, stage / "sidecar" / "cache")
+    normalize_windows_batch_files(stage)
+
+
 def normalize_windows_batch_files(root: Path) -> None:
     for path in root.rglob("*.bat"):
         text = path.read_text(encoding="utf-8")
@@ -123,7 +136,13 @@ def find_iscc(explicit: str | None) -> str | None:
     return None
 
 
-def compile_windows_installer(root: Path, payload: Path, version: str, iscc: str | None) -> bool:
+def compile_windows_installer(
+    root: Path,
+    payload: Path,
+    version: str,
+    iscc: str | None,
+    bundled_models: bool = False,
+) -> bool:
     compiler = find_iscc(iscc)
     if not compiler:
         print("Inno Setup compiler not found; skipped Windows installer .exe.")
@@ -131,16 +150,16 @@ def compile_windows_installer(root: Path, payload: Path, version: str, iscc: str
         return False
 
     script = root / "installer" / "windows" / "RadioChatterInstaller.iss"
-    subprocess.run(
-        [
-            compiler,
-            f"/DAppVersion={version}",
-            f"/DPayloadDir={payload}",
-            str(script),
-        ],
-        cwd=root,
-        check=True,
-    )
+    command = [
+        compiler,
+        f"/DAppVersion={version}",
+        f"/DPayloadDir={payload}",
+        f"/DOutputDir={payload.parent.parent}",
+    ]
+    if bundled_models:
+        command.append("/DBundledModels=1")
+    command.append(str(script))
+    subprocess.run(command, cwd=root, check=True)
     return True
 
 
@@ -153,6 +172,11 @@ def main() -> int:
     parser.add_argument("--game-dir", default=None)
     parser.add_argument("--skip-build", action="store_true")
     parser.add_argument("--payload-source", default=None, help="Use a prebuilt payload directory containing RadioChatter.dll and sidecar/.")
+    parser.add_argument(
+        "--model-cache",
+        default=None,
+        help="Verified cache from prepare_model_bundle.py; also builds separate with-models assets.",
+    )
     parser.add_argument("--output-dir", default=str(root / "dist"))
     parser.add_argument("--iscc", default=None, help="Path to Inno Setup ISCC.exe")
     parser.add_argument("--skip-windows-installer", action="store_true")
@@ -178,6 +202,19 @@ def main() -> int:
 
     if not args.skip_windows_installer:
         compile_windows_installer(root, payload, version, args.iscc)
+
+    if args.model_cache:
+        full_payload = output_dir / "github" / "payload-with-models"
+        stage_payload_with_models(payload, Path(args.model_cache), full_payload)
+
+        full_linux_zip = output_dir / f"{PACKAGE_NAME}-{version}-linux-with-models.zip"
+        make_linux_zip(root, full_payload, full_linux_zip)
+        print(f"Wrote {full_linux_zip}")
+
+        if not args.skip_windows_installer:
+            compile_windows_installer(
+                root, full_payload, version, args.iscc, bundled_models=True
+            )
 
     return 0
 
