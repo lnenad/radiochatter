@@ -63,6 +63,7 @@ namespace RadioChatter.Audio
         private GUIStyle _statusStyle;
         private SidecarSupervisor.SidecarStatus _lastSidecarStatus = SidecarSupervisor.SidecarStatus.Unknown;
         private float _sidecarReadyAt = float.NaN;
+        private bool _pushToTalkActive;
 
         public void Initialize(Config config, GameObject host, ManualLogSource log)
         {
@@ -73,10 +74,21 @@ namespace RadioChatter.Audio
             _host = host;
         }
 
+        public void SetPushToTalkActive(bool active)
+        {
+            _pushToTalkActive = active;
+        }
+
         public void Transmit(RadioRole role, RadioEventType type, string text, float displaySeconds)
         {
             if (_config == null || _client == null)
                 return;
+
+            // A support broadcast or direct ground exchange must never inherit an automatic
+            // "copy" that was prepared for earlier traffic. Without this purge, the old reply
+            // can be held behind the ground channel and play immediately after an ETA question.
+            if (CancelsOutstandingAutomaticAcknowledgements(type, text))
+                CancelOutstandingAutomaticAcknowledgements();
 
             // Positional AWACS info ages fast; if the clip cannot start playing before the
             // deadline (busy channel, slow TTS), it is dropped instead of played late.
@@ -93,6 +105,7 @@ namespace RadioChatter.Audio
                 case RadioEventType.NewContact:
                 case RadioEventType.PictureUpdate:
                 case RadioEventType.VectorToTarget:
+                case RadioEventType.GroundSupportVector:
                     return ContactInfoLifetimeSeconds;
                 case RadioEventType.BattlefieldChatter:
                     return BattlefieldChatterLifetimeSeconds;
@@ -277,6 +290,11 @@ namespace RadioChatter.Audio
             if (clip.Audio == null || clip.Audio.Samples == null || clip.Audio.Samples.Length == 0 || _host == null)
                 return;
 
+            // Purge once more at playback time in case unrelated radio traffic completed while
+            // this clip was waiting for TTS or for its audio lane.
+            if (CancelsOutstandingAutomaticAcknowledgements(clip.Type, clip.Text))
+                CancelOutstandingAutomaticAcknowledgements();
+
             float[] samples;
             try
             {
@@ -298,7 +316,7 @@ namespace RadioChatter.Audio
             source.playOnAwake = false;
             source.spatialBlend = 0f;
             source.ignoreListenerPause = false;
-            source.volume = _config != null ? _config.Volume.Value : 0.8f;
+            source.volume = VolumeForRole(clip.Role);
             source.clip = audioClip;
             source.Play();
             TowerReadbackExpectation readbackExpectation;
@@ -366,13 +384,21 @@ namespace RadioChatter.Audio
 
         private void UpdateActiveVolumes()
         {
-            float volume = _config != null ? _config.Volume.Value : 0.8f;
             for (int i = 0; i < _activeSources.Count; i++)
             {
                 AudioSource source = _activeSources[i].Source;
                 if (source != null)
-                    source.volume = volume;
+                    source.volume = VolumeForRole(_activeSources[i].Role);
             }
+        }
+
+        private float VolumeForRole(RadioRole role)
+        {
+            float volume = _config != null ? _config.Volume.Value : 0.8f;
+            if (!_pushToTalkActive || IsPlayerRole(role) || _config == null)
+                return volume;
+
+            return volume * Mathf.Clamp01(_config.PushToTalkReceiveVolume.Value);
         }
 
         private void Enqueue(RadioRole role, RadioEventType type, string text, float displaySeconds, float expireAt, ClipData clip)
@@ -694,8 +720,9 @@ namespace RadioChatter.Audio
             if (_config == null || !_config.PlayerAcknowledgements.Value)
                 return default;
 
-            // Ambient allied traffic is not addressed to the player and never needs an answer.
-            if (clip.Type == RadioEventType.BattlefieldChatter)
+            // Broadcast traffic and questions require either no answer or an actual player
+            // transmission. A synthetic generic acknowledgement is inappropriate for both.
+            if (SuppressesAutomaticAcknowledgements(clip.Type, clip.Text))
                 return default;
 
             if (IsPlayerRole(clip.Role) || clip.Role == RadioRole.System)
@@ -736,6 +763,47 @@ namespace RadioChatter.Audio
                 Text = PickAcknowledgement(),
                 IsReadback = false
             };
+        }
+
+        private static bool SuppressesAutomaticAcknowledgements(RadioEventType type, string text)
+        {
+            return type == RadioEventType.BattlefieldChatter ||
+                   CancelsOutstandingAutomaticAcknowledgements(type, text);
+        }
+
+        private static bool CancelsOutstandingAutomaticAcknowledgements(RadioEventType type, string text)
+        {
+            if (type == RadioEventType.GroundSupportHail ||
+                type == RadioEventType.GroundSupportAcknowledged ||
+                type == RadioEventType.GroundSupportVector ||
+                type == RadioEventType.GroundSupportDeclined ||
+                type == RadioEventType.GroundSupportCanceled)
+            {
+                return true;
+            }
+
+            if (string.IsNullOrWhiteSpace(text))
+                return false;
+
+            // Do not answer questions such as "what is your ETA?" with a random "copy" even
+            // if a future question arrives under a newly added event type.
+            return text.IndexOf('?') >= 0 ||
+                   text.IndexOf("what is your E T A", System.StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   text.IndexOf("what is your ETA", System.StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        private void CancelOutstandingAutomaticAcknowledgements()
+        {
+            _pendingAcknowledgements.Clear();
+
+            // Responses are attached to active transmissions and normally enter the pending
+            // queue when their clips finish. Clear those too so none can surface after a prompt.
+            for (int i = 0; i < _activeSources.Count; i++)
+            {
+                ActiveTransmission active = _activeSources[i];
+                active.Response = default;
+                _activeSources[i] = active;
+            }
         }
 
         private bool TryGetSpokenTowerReadback(ReadyClip clip, out TowerReadbackExpectation expectation)

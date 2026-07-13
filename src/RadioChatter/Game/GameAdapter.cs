@@ -164,6 +164,10 @@ namespace RadioChatter.Game
             bool destroyed = false;
             try { destroyed = aircraft.disabled || aircraft.unitState == global::Unit.UnitState.Destroyed; } catch { }
 
+            bool weaponAmmoKnown;
+            bool hasUsableWeapons;
+            ReadOffensiveWeaponState(aircraft, out weaponAmmoKnown, out hasUsableWeapons);
+
             snapshot.Player = new PlayerState
             {
                 Valid = true,
@@ -180,9 +184,56 @@ namespace RadioChatter.Game
                 GearDown = aircraft.gearDeployed,
                 Grounded = landed || (aircraft.gearDeployed && aircraft.radarAlt < 2f && aircraft.speed < 45f),
                 FuelFraction = SafeFuelLevel(aircraft),
+                WeaponAmmoKnown = weaponAmmoKnown,
+                HasUsableWeapons = hasUsableWeapons,
                 Ejected = aircraft.HasEjected(),
                 Destroyed = destroyed
             };
+        }
+
+        /// <summary>Reads live station counts so Winchester is detected even if weapons were
+        /// already expended before the mod observed their fire events. Utility and cargo
+        /// stations do not keep the aircraft in a combat-capable state.</summary>
+        private static void ReadOffensiveWeaponState(
+            global::Aircraft aircraft,
+            out bool known,
+            out bool hasUsableWeapons)
+        {
+            known = false;
+            hasUsableWeapons = false;
+
+            try
+            {
+                if (aircraft.weaponStations == null)
+                    return;
+
+                for (int i = 0; i < aircraft.weaponStations.Count; i++)
+                {
+                    global::WeaponStation station = aircraft.weaponStations[i];
+                    global::WeaponInfo info = station != null ? station.WeaponInfo : null;
+                    if (info == null || !IsOffensiveWeapon(info))
+                        continue;
+
+                    known = true;
+                    if (station.Ammo > 0)
+                    {
+                        hasUsableWeapons = true;
+                        return;
+                    }
+                }
+            }
+            catch
+            {
+                // Unknown loadouts must never silence AWACS.
+                known = false;
+                hasUsableWeapons = false;
+            }
+        }
+
+        private static bool IsOffensiveWeapon(global::WeaponInfo info)
+        {
+            return info.gun || info.missile || info.bomb || info.nuclear || info.energy ||
+                   info.blastDamage > 0f || info.pierceDamage > 0f;
         }
 
         private static void FillFriendlyAirbases(Snapshot snapshot, global::FactionHQ localHq)
@@ -239,6 +290,7 @@ namespace RadioChatter.Game
                     Position = PositionOf(unit),
                     Disabled = unit.disabled || unit.unitState == global::Unit.UnitState.Destroyed,
                     IsAircraft = aircraft != null,
+                    IsGroundVehicle = unit is global::GroundVehicle,
                     IsMissile = unit is global::Missile,
                     IsFriendly = friendly,
                     IsPlayer = global::GameManager.IsLocalAircraft(unit),

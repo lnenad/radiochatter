@@ -39,16 +39,20 @@ namespace RadioChatter.Speech
             _log = log;
         }
 
+        public bool IsPushToTalkHeld { get; private set; }
+
         public void Tick()
         {
             if (_config == null || !_config.VoiceCommandsEnabled.Value)
             {
+                IsPushToTalkHeld = false;
                 if (_recording)
                     CancelRecording();
                 return;
             }
 
             bool held = UnityInput.Current.GetKey(_config.VoicePushToTalkKey.Value);
+            IsPushToTalkHeld = held;
 
             if (_recording)
             {
@@ -236,7 +240,8 @@ namespace RadioChatter.Speech
                    "Request landing clearance. Inbound. " +
                    "Request picture. Bogey dope. Request vector to target. " +
                    "Vector to objective. Request objective list. " +
-                   "Vector to home plate. Return to base. Radio check. " +
+                   "Vector to home plate. Return to base. Radio check. Radio quiet. Resume calls. " +
+                   "Hammer four unable. Negative Anvil one. Unable to assist Ranger two. " +
                    _config.AwacsCallsign.Value + ", " + _config.PlayerCallsign.Value + ", airborne, checking in.";
 
             if (_config.VoiceRequireTowerReadbacks.Value)

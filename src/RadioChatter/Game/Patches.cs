@@ -78,6 +78,99 @@ namespace RadioChatter.Game
         }
     }
 
+    /// <summary>Positive damage is the authoritative fallback for ground-support requests.
+    /// The dealer id survives blast/fragment damage and lets us reject friendly fire.</summary>
+    [HarmonyPatch(typeof(global::Unit), "RecordDamage", new Type[] { typeof(global::PersistentID), typeof(float) })]
+    internal static class UnitRecordDamageGroundSupportPatch
+    {
+        private static void Postfix(global::Unit __instance, global::PersistentID lastDamagedBy, float damageAmount)
+        {
+            if (__instance == null || damageAmount <= 0f)
+                return;
+
+            global::Unit attacker;
+            if (!lastDamagedBy.TryGetUnit(out attacker))
+                return;
+
+            GroundSupportAttackPatchHelpers.TryEnqueue(__instance, attacker);
+        }
+    }
+
+    /// <summary>Turrets and guns pass their selected target through WeaponStation.Fire. This
+    /// catches a group being fired upon even when the first rounds miss.</summary>
+    [HarmonyPatch(typeof(global::WeaponStation), "Fire", new Type[] { typeof(global::Unit), typeof(global::Unit) })]
+    internal static class WeaponStationFireGroundSupportPatch
+    {
+        private static void Postfix(global::Unit owner, global::Unit target)
+        {
+            GroundSupportAttackPatchHelpers.TryEnqueue(target, owner);
+        }
+    }
+
+    /// <summary>Missile/bomb-style stations use LaunchMount rather than Fire.</summary>
+    [HarmonyPatch(typeof(global::WeaponStation), "LaunchMount", new Type[] { typeof(global::Unit), typeof(global::Unit), typeof(global::GlobalPosition) })]
+    internal static class WeaponStationLaunchGroundSupportPatch
+    {
+        private static void Postfix(global::Unit owner, global::Unit target)
+        {
+            GroundSupportAttackPatchHelpers.TryEnqueue(target, owner);
+        }
+    }
+
+    internal static class GroundSupportAttackPatchHelpers
+    {
+        // Automatic weapons call WeaponStation.Fire repeatedly. The director performs the
+        // longer group-level suppression; this short throttle keeps the event bus itself quiet.
+        private const float PerVehicleEventSeconds = 2f;
+        private static readonly System.Collections.Generic.Dictionary<uint, float> LastEventAt =
+            new System.Collections.Generic.Dictionary<uint, float>(64);
+
+        public static void TryEnqueue(global::Unit victim, global::Unit attacker)
+        {
+            if (victim == null || attacker == null || victim == attacker ||
+                !(victim is global::GroundVehicle) || victim.disabled ||
+                Plugin.Cfg == null || !Plugin.Cfg.GroundSupportRequests.Value ||
+                !Plugin.Cfg.VoiceCommandsEnabled.Value)
+            {
+                return;
+            }
+
+            try
+            {
+                global::FactionHQ localHq;
+                if (!global::GameManager.GetLocalHQ(out localHq) || localHq == null ||
+                    victim.NetworkHQ != localHq || attacker.NetworkHQ == localHq)
+                {
+                    return;
+                }
+
+                uint victimId = GameAdapter.PersistentId(victim);
+                float now = Time.unscaledTime;
+                float last;
+                if (victimId == 0 ||
+                    (LastEventAt.TryGetValue(victimId, out last) && now - last < PerVehicleEventSeconds))
+                {
+                    return;
+                }
+
+                LastEventAt[victimId] = now;
+                RadioEventBus.Enqueue(new RadioEvent
+                {
+                    Type = RadioEventType.GroundUnitUnderAttack,
+                    SubjectId = victimId,
+                    SubjectName = GameAdapter.RadioName(victim),
+                    SubjectIsFriendly = true,
+                    Position = GameAdapter.PositionOf(victim),
+                    Text = GameAdapter.RadioName(attacker)
+                });
+            }
+            catch
+            {
+                // Combat hooks must never disrupt the game's own weapon/damage path.
+            }
+        }
+    }
+
     [HarmonyPatch(typeof(global::Aircraft), "LockedByMissile")]
     internal static class AircraftLockedByMissilePatch
     {

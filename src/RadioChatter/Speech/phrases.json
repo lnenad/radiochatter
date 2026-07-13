@@ -102,6 +102,14 @@
     "{callsign}, {awacs}, unable",
     "{callsign}, {awacs}, negative, unable"
   ],
+  "awacs_radio_quiet": [
+    "{callsign}, {awacs}, radio quiet. Emergency and requested traffic only",
+    "{callsign}, {awacs}, copy radio quiet. Holding routine calls"
+  ],
+  "awacs_radio_resumed": [
+    "{callsign}, {awacs}, normal traffic restored",
+    "{callsign}, {awacs}, copy, resuming routine calls"
+  ],
   "awacs_check_in": [
     "{callsign}, {awacs}, radar contact, check-in acknowledged",
     "{callsign}, {awacs}, radar contact, proceed on mission",
@@ -126,6 +134,45 @@
   "battlefield_lost": [
     "mayday, {type} flight is going down",
     "{type} flight, hit, losing the aircraft"
+  ],
+  "ground_support_hail": [
+    "any available aircraft, this is {ground_callsign}. Troops in contact, requesting support. Location bearing {bearing}, range {range}. Call {ground_callsign} with your callsign if you can assist",
+    "all aircraft, {ground_callsign} is taking fire and requests immediate support. Position bearing {bearing}, range {range}. Address {ground_callsign} and identify yourself if inbound"
+  ],
+  "ground_support_acknowledged": [
+    "{callsign}, {ground_callsign}, roger. Please hurry",
+    "{callsign}, {ground_callsign}, copy, you are inbound. What is your E T A?",
+    "{callsign}, {ground_callsign}, acknowledged. We will hold as long as we can"
+  ],
+  "ground_support_followup_ack": [
+    "{callsign}, {ground_callsign}, roger",
+    "{callsign}, {ground_callsign}, copy your last. We will hold",
+    "{callsign}, {ground_callsign}, understood. Please hurry"
+  ],
+  "ground_support_declined": [
+    "aircraft declining, {ground_callsign}, roger. We will keep the request open to others",
+    "{ground_callsign}, copy unable. We will seek other support",
+    "negative support received, {ground_callsign}, understood"
+  ],
+  "awacs_ground_support_vector": [
+    "{callsign}, {awacs}, vector to {ground_callsign}, bearing {bearing}, range {range}",
+    "{callsign}, {ground_callsign} is bearing {bearing}, range {range}"
+  ],
+  "awacs_no_ground_support": [
+    "{callsign}, {awacs}, no available ground support request",
+    "{callsign}, {awacs}, unable, no active or pending support request"
+  ],
+  "awacs_ground_support_ambiguous": [
+    "{callsign}, {awacs}, multiple groups use that callsign. Say the group number",
+    "{callsign}, {awacs}, support callsign ambiguous. Specify the group number"
+  ],
+  "awacs_ground_support_reference_required": [
+    "{callsign}, {awacs}, specify the ground callsign, last support request, or secondary",
+    "{callsign}, {awacs}, say vector to a ground callsign, last support request, or secondary"
+  ],
+  "awacs_ground_support_lost": [
+    "{callsign}, {awacs}, {ground_callsign} is no longer active. Support task canceled",
+    "{callsign}, {awacs}, lost contact with {ground_callsign}. Cancel support task"
   ],
   "radio_check_tower": [
     "{callsign}, tower, read you loud and clear",

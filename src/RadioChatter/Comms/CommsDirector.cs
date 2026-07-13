@@ -59,6 +59,14 @@ namespace RadioChatter.Comms
         private const float BattlefieldChatterCandidateLifetimeSeconds = 9f;
         private const int BattlefieldChatterPriority = 10;
         private const int MaxBattlefieldChatterCandidates = 16;
+        private const int GroundSupportHailPriority = 50;
+        private const float GroundSupportLostGraceSeconds = 6f;
+        private const float GroundSupportDuplicateSeconds = 10f;
+
+        private static readonly string[] GroundSupportCallsigns =
+        {
+            "Anvil", "Hammer", "Bison", "Ranger", "Sentinel", "Nomad"
+        };
 
         private readonly Config _config;
         private readonly IRadioOutput _output;
@@ -82,6 +90,8 @@ namespace RadioChatter.Comms
         private readonly List<PendingTowerReadback> _pendingTowerReadbacks = new List<PendingTowerReadback>(3);
         private readonly Dictionary<uint, FriendlyAircraftState> _friendlyAircraftStates = new Dictionary<uint, FriendlyAircraftState>(64);
         private readonly List<BattlefieldChatterCandidate> _battlefieldChatterCandidates = new List<BattlefieldChatterCandidate>(MaxBattlefieldChatterCandidates);
+        private readonly List<GroundSupportGroup> _groundSupportGroups = new List<GroundSupportGroup>(8);
+        private readonly Dictionary<uint, GroundSupportGroup> _groundSupportByUnit = new Dictionary<uint, GroundSupportGroup>(32);
 
         private int _aircraftInstanceId;
         private int _homeAirbaseInstanceId;
@@ -114,12 +124,16 @@ namespace RadioChatter.Comms
         private float _previousRtbHomeDistance = float.NaN;
         private float _rtbInboundStartedAt = float.NaN;
         private float _rtbLastInboundAt = float.NaN;
+        private bool _routineAwacsQuiet;
+        private AwacsTrafficMode _awacsTrafficMode;
         private float _nextSnapshotLogTime;
         private float _suppressPictureUntil;
         private float _suppressRoutineAwacsUntil;
         private float _lastMissileWarnAt = float.NegativeInfinity;
         private float _nextBattlefieldChatterAt;
         private bool _battlefieldChatterTracking;
+        private GroundSupportGroup _activeGroundSupportGroup;
+        private int _nextGroundSupportCallsign;
         private bool _sessionActive;
 
         public CommsDirector(Config config, IRadioOutput output, ManualLogSource log)
@@ -152,9 +166,18 @@ namespace RadioChatter.Comms
 
             _mpClientLogged = false;
 
-            if (!snapshot.InMission || !snapshot.Player.Valid)
+            if (!snapshot.InMission)
             {
                 EndSession();
+                return;
+            }
+
+            if (!snapshot.Player.Valid)
+            {
+                // Aircraft changes can briefly leave the host without a local aircraft while
+                // the mission itself continues. Preserve only mission-level ground callsigns;
+                // all aircraft/radio state still resets exactly as before.
+                EndSession(true);
                 return;
             }
 
@@ -179,7 +202,9 @@ namespace RadioChatter.Comms
                 return;
 
             DetectDestroyedUnits(snapshot);
+            UpdateGroundSupportRequests(snapshot);
             DetectBattlefieldChatter(snapshot);
+            UpdateRoutineAwacsQuietState(snapshot);
             DetectContacts(snapshot);
             DetectMissiles(snapshot);
             DetectEjection(snapshot);
@@ -195,12 +220,12 @@ namespace RadioChatter.Comms
             ProcessQueue(snapshot.Time);
         }
 
-        private void EndSession()
+        private void EndSession(bool preserveGroundSupport = false)
         {
             bool stopOutput = _sessionActive;
             _sessionActive = false;
             RadioEventBus.Clear();
-            ResetSession();
+            ResetSession(preserveGroundSupport);
 
             if (stopOutput)
                 _output.StopAll();
@@ -235,6 +260,10 @@ namespace RadioChatter.Comms
 
                         if (evt.SubjectIsFriendly && evt.SubjectIsAircraft)
                             AddBattlefieldChatterCandidate(evt.SubjectId, evt.SubjectName, "battlefield_lost", null, now, 4);
+                        break;
+
+                    case RadioEventType.GroundUnitUnderAttack:
+                        HandleGroundUnitUnderAttack(snapshot, evt, now);
                         break;
 
                     case RadioEventType.PlayerKill:
@@ -383,6 +412,280 @@ namespace RadioChatter.Comms
                 _heldPlayerWeaponCalls.Remove(_stalePlayerWeaponCalls[i]);
         }
 
+        private bool GroundSupportEnabled()
+        {
+            return _config.GroundSupportRequests.Value && _config.VoiceCommandsEnabled.Value;
+        }
+
+        private void HandleGroundUnitUnderAttack(Snapshot snapshot, RadioEvent evt, float now)
+        {
+            if (!GroundSupportEnabled() || evt.SubjectId == 0)
+                return;
+
+            GroundSupportGroup group;
+            if (!_groundSupportByUnit.TryGetValue(evt.SubjectId, out group) || group.Closed)
+                group = FindGroundSupportGroupNear(evt.Position);
+
+            if (group == null)
+            {
+                group = new GroundSupportGroup
+                {
+                    Id = evt.SubjectId,
+                    AnchorUnitId = evt.SubjectId,
+                    Callsign = NextGroundSupportCallsign(),
+                    Position = evt.Position,
+                    Pending = true,
+                    LastAttackAt = now,
+                    LastSeenAliveAt = now
+                };
+                group.MemberIds.Add(evt.SubjectId);
+                _groundSupportGroups.Add(group);
+                _groundSupportByUnit[evt.SubjectId] = group;
+
+                QueueGroundSupportHail(snapshot, group, now);
+                _log.LogInfo($"Ground support request opened: {group.Callsign} ({evt.SubjectName}) group #{group.Id}.");
+                return;
+            }
+
+            group.MemberIds.Add(evt.SubjectId);
+            _groundSupportByUnit[evt.SubjectId] = group;
+            float previousAttackAt = group.LastAttackAt;
+            group.LastAttackAt = now;
+            group.LastSeenAliveAt = now;
+            if (group.AnchorUnitId == evt.SubjectId || group.AnchorUnitId == 0)
+                group.Position = evt.Position;
+
+            // A declined/switched-away request stays quiet while attacks continue. Only a
+            // genuinely new engagement after a full quiet interval may reuse the callsign.
+            if (group.Dismissed &&
+                now - group.DismissedAt >= _config.GroundSupportRepeatSeconds.Value &&
+                now - previousAttackAt >= _config.GroundSupportRepeatSeconds.Value)
+            {
+                group.Dismissed = false;
+                group.Pending = true;
+                QueueGroundSupportHail(snapshot, group, now);
+                _log.LogInfo($"Ground support request reopened: {group.Callsign}.");
+            }
+        }
+
+        private GroundSupportGroup FindGroundSupportGroupNear(GPos position)
+        {
+            float radius = _config.GroundSupportGroupRadiusM.Value;
+            GroundSupportGroup nearest = null;
+            float bestDistance = float.PositiveInfinity;
+
+            for (int i = 0; i < _groundSupportGroups.Count; i++)
+            {
+                GroundSupportGroup candidate = _groundSupportGroups[i];
+                if (candidate.Closed)
+                    continue;
+
+                float distance = GPos.Distance2D(candidate.Position, position);
+                if (distance <= radius && distance < bestDistance)
+                {
+                    nearest = candidate;
+                    bestDistance = distance;
+                }
+            }
+
+            return nearest;
+        }
+
+        private string NextGroundSupportCallsign()
+        {
+            int index = _nextGroundSupportCallsign++;
+            string stem = GroundSupportCallsigns[index % GroundSupportCallsigns.Length];
+            int number = index / GroundSupportCallsigns.Length + 1;
+            return stem + " " + number;
+        }
+
+        private bool QueueGroundSupportHail(Snapshot snapshot, GroundSupportGroup group, float now)
+        {
+            if (group == null || group.Closed || group.Accepted || group.Dismissed)
+                return false;
+
+            bool queued = Queue(RadioRole.Game, RadioEventType.GroundSupportHail, "ground_support_hail", Slots(
+                "ground_callsign", group.Callsign,
+                "bearing", NumberSpeech.Bearing(GPos.Bearing(snapshot.Player.Position, group.Position)),
+                "range", RadioText.FormatRange(GPos.Distance2D(snapshot.Player.Position, group.Position), snapshot.Units)),
+                now, GroundSupportHailPriority, 7f, 0f, false,
+                subjectId: group.Id,
+                duplicateWindowSecondsOverride: 0f);
+
+            if (queued)
+            {
+                group.LastHailAt = now;
+                group.NextHailAt = now + _config.GroundSupportRepeatSeconds.Value;
+            }
+
+            return queued;
+        }
+
+        private void UpdateGroundSupportRequests(Snapshot snapshot)
+        {
+            if (!GroundSupportEnabled())
+            {
+                DisableGroundSupportRequests();
+                return;
+            }
+
+            float now = snapshot.Time;
+            float radius = _config.GroundSupportGroupRadiusM.Value;
+
+            for (int g = 0; g < _groundSupportGroups.Count; g++)
+            {
+                GroundSupportGroup group = _groundSupportGroups[g];
+                if (group.Closed)
+                    continue;
+
+                bool alive = false;
+                bool anchorUpdated = false;
+                for (int i = 0; i < snapshot.UnitLifecycles.Count; i++)
+                {
+                    UnitLifecycleInfo unit = snapshot.UnitLifecycles[i];
+                    if (!unit.IsFriendly || !unit.IsGroundVehicle || unit.Disabled)
+                        continue;
+
+                    bool member = group.MemberIds.Contains(unit.Id);
+                    if (!member && GPos.Distance2D(group.Position, unit.Position) > radius)
+                        continue;
+
+                    alive = true;
+                    if (unit.Id == group.AnchorUnitId)
+                    {
+                        group.Position = unit.Position;
+                        anchorUpdated = true;
+                    }
+                    else if (!anchorUpdated && member)
+                    {
+                        group.Position = unit.Position;
+                    }
+                }
+
+                if (alive)
+                {
+                    group.LastSeenAliveAt = now;
+                }
+                else if (now - group.LastSeenAliveAt >= GroundSupportLostGraceSeconds)
+                {
+                    CloseGroundSupportGroup(group, now);
+                    continue;
+                }
+
+                if (group.Pending && now >= group.NextHailAt)
+                    QueueGroundSupportHail(snapshot, group, now);
+            }
+        }
+
+        private void CloseGroundSupportGroup(GroundSupportGroup group, float now)
+        {
+            group.Closed = true;
+            group.Pending = false;
+            group.Accepted = false;
+            RemoveQueuedGroundSupport(group.Id);
+            CancelGroundSupportHailAudioAndRescheduleOthers(group, now);
+
+            if (_activeGroundSupportGroup != group)
+                return;
+
+            _activeGroundSupportGroup = null;
+            _queue.RemoveAll(item => item.Type == RadioEventType.GroundSupportVector);
+            _output.StopTransmissions(RadioEventType.GroundSupportVector);
+            Queue(RadioRole.Awacs, RadioEventType.GroundSupportCanceled, "awacs_ground_support_lost", Slots(
+                "callsign", _config.PlayerCallsign.Value,
+                "awacs", _config.AwacsCallsign.Value,
+                "ground_callsign", group.Callsign), now, VoiceResponsePriority, 4f, 0f, false,
+                subjectId: group.Id,
+                duplicateWindowSecondsOverride: GroundSupportDuplicateSeconds,
+                bypassStartupHold: true);
+            _log.LogInfo($"Ground support task canceled: {group.Callsign} is no longer active.");
+        }
+
+        private bool QueueGroundSupportVector(
+            Snapshot snapshot,
+            GroundSupportGroup group,
+            string playerCallsign,
+            float now)
+        {
+            if (group == null || group.Closed)
+                return false;
+
+            return Queue(RadioRole.Awacs, RadioEventType.GroundSupportVector,
+                "awacs_ground_support_vector", Slots(
+                    "callsign", playerCallsign,
+                    "awacs", _config.AwacsCallsign.Value,
+                    "ground_callsign", group.Callsign,
+                    "bearing", NumberSpeech.Bearing(GPos.Bearing(snapshot.Player.Position, group.Position)),
+                    "range", RadioText.FormatRange(GPos.Distance2D(snapshot.Player.Position, group.Position), snapshot.Units)),
+                now, VoiceResponsePriority, 5f, 0f, false,
+                subjectId: group.Id,
+                duplicateWindowSecondsOverride: GroundSupportDuplicateSeconds,
+                bypassStartupHold: true);
+        }
+
+        private bool QueueGroundSupportAcknowledgement(GroundSupportGroup group, string playerCallsign, float now, bool followup)
+        {
+            if (group == null || group.Closed)
+                return false;
+
+            return Queue(RadioRole.Game, RadioEventType.GroundSupportAcknowledged,
+                followup ? "ground_support_followup_ack" : "ground_support_acknowledged", Slots(
+                    "callsign", playerCallsign,
+                    "ground_callsign", group.Callsign),
+                now, VoiceResponsePriority, 4f, 0f, false,
+                subjectId: group.Id,
+                duplicateWindowSecondsOverride: 0f,
+                bypassStartupHold: true);
+        }
+
+        private void RemoveQueuedGroundSupport(uint groupId)
+        {
+            _queue.RemoveAll(item =>
+                item.SubjectId == groupId &&
+                (item.Type == RadioEventType.GroundSupportHail ||
+                 item.Type == RadioEventType.GroundSupportAcknowledged ||
+                 item.Type == RadioEventType.GroundSupportVector ||
+                 item.Type == RadioEventType.GroundSupportDeclined));
+        }
+
+        private void CancelGroundSupportHailAudioAndRescheduleOthers(GroundSupportGroup excluded, float now)
+        {
+            _queue.RemoveAll(item => item.Type == RadioEventType.GroundSupportHail);
+            _output.StopTransmissions(RadioEventType.GroundSupportHail);
+
+            // StopTransmissions invalidates same-frame TTS requests of that type. Requeue other
+            // pending groups on a later poll, after the audio clock has advanced.
+            float retryAt = now + Mathf.Max(0.25f, _config.PollIntervalSeconds.Value);
+            for (int i = 0; i < _groundSupportGroups.Count; i++)
+            {
+                GroundSupportGroup group = _groundSupportGroups[i];
+                if (group != excluded && group.Pending && !group.Closed && !group.Dismissed)
+                    group.NextHailAt = Mathf.Min(group.NextHailAt, retryAt);
+            }
+        }
+
+        private void DisableGroundSupportRequests()
+        {
+            if (_groundSupportGroups.Count == 0 && _activeGroundSupportGroup == null)
+                return;
+
+            _groundSupportGroups.Clear();
+            _groundSupportByUnit.Clear();
+            _activeGroundSupportGroup = null;
+            _nextGroundSupportCallsign = 0;
+            _queue.RemoveAll(item =>
+                item.Type == RadioEventType.GroundSupportHail ||
+                item.Type == RadioEventType.GroundSupportAcknowledged ||
+                item.Type == RadioEventType.GroundSupportVector ||
+                item.Type == RadioEventType.GroundSupportDeclined ||
+                item.Type == RadioEventType.GroundSupportCanceled);
+            _output.StopTransmissions(RadioEventType.GroundSupportHail);
+            _output.StopTransmissions(RadioEventType.GroundSupportAcknowledged);
+            _output.StopTransmissions(RadioEventType.GroundSupportVector);
+            _output.StopTransmissions(RadioEventType.GroundSupportDeclined);
+            _output.StopTransmissions(RadioEventType.GroundSupportCanceled);
+        }
+
         private void DetectDestroyedUnits(Snapshot snapshot)
         {
             for (int i = 0; i < snapshot.UnitLifecycles.Count; i++)
@@ -404,7 +707,7 @@ namespace RadioChatter.Comms
 
         private void DetectContacts(Snapshot snapshot)
         {
-            if (!_config.NewContactCalls.Value)
+            if (!_config.NewContactCalls.Value || _routineAwacsQuiet)
                 return;
 
             for (int i = 0; i < snapshot.Contacts.Count; i++)
@@ -1115,6 +1418,37 @@ namespace RadioChatter.Comms
             }
         }
 
+        /// <summary>Quiet automatic combat information only from a reliable Winchester state
+        /// or an explicit player command. Flight direction is deliberately not treated as intent.
+        /// This never gates urgent calls or direct voice-command responses.</summary>
+        private void UpdateRoutineAwacsQuietState(Snapshot snapshot)
+        {
+            bool winchester = !snapshot.Player.Grounded &&
+                              snapshot.Player.WeaponAmmoKnown &&
+                              !snapshot.Player.HasUsableWeapons;
+            bool automaticWinchesterQuiet = _config.QuietAwacsWhenWinchester.Value && winchester;
+            bool quiet = _awacsTrafficMode == AwacsTrafficMode.Quiet ||
+                         (_awacsTrafficMode == AwacsTrafficMode.Automatic && automaticWinchesterQuiet);
+            if (quiet == _routineAwacsQuiet)
+                return;
+
+            _routineAwacsQuiet = quiet;
+            if (!quiet)
+            {
+                _log.LogDebug("Routine AWACS automatic callouts restored.");
+                return;
+            }
+
+            // Forced/player-requested contact calls use BypassStartupHold and are preserved.
+            _queue.RemoveAll(item => IsContactInfoCall(item.Type) && !item.BypassStartupHold);
+            _startupAwacsTransmissions.RemoveAll(item => IsContactInfoCall(item.Type));
+            _previousRtbHomeDistance = float.NaN;
+            _rtbInboundStartedAt = float.NaN;
+            _rtbLastInboundAt = float.NaN;
+            string reason = _awacsTrafficMode == AwacsTrafficMode.Quiet ? "player-requested radio quiet" : "Winchester";
+            _log.LogInfo($"Routine AWACS automatic callouts quieted: {reason}.");
+        }
+
         private void DetectRtb(Snapshot snapshot)
         {
             if (!_config.RtbCalls.Value || snapshot.Player.Grounded || snapshot.Player.Ejected)
@@ -1133,23 +1467,26 @@ namespace RadioChatter.Comms
                     "range", RadioText.FormatRange(distanceM, snapshot.Units)), snapshot.Time, 55, 4f, 300f, false);
             }
 
-            // The bingo-fuel warning above stays automatic; the periodic "continue RTB" vector
-            // advisory below is pull-only in request-driven mode ("vector to home plate").
-            if (RequestDrivenComms())
+            // The bingo-fuel warning above stays automatic. The periodic "continue RTB" vector
+            // is pull-only in request-driven mode and is omitted while routine AWACS is quiet.
+            if (RequestDrivenComms() || _routineAwacsQuiet)
                 return;
 
             bool inRtbVectorRange = distanceM >= RtbVectorMinDistanceM && distanceM <= RtbVectorMaxDistanceM;
-            bool closing = float.IsNaN(_previousRtbHomeDistance) || distanceM < _previousRtbHomeDistance - RtbVectorMinClosingMeters;
-            _previousRtbHomeDistance = distanceM;
-
             if (!inRtbVectorRange)
             {
+                _previousRtbHomeDistance = float.NaN;
                 _rtbInboundStartedAt = float.NaN;
                 _rtbLastInboundAt = float.NaN;
                 return;
             }
 
-            bool pointedAtHome = IsPointedAt(snapshot.Player.Position, snapshot.Player.HeadingDeg, home.Position, RtbVectorHeadingToleranceDeg);
+            bool closing = float.IsNaN(_previousRtbHomeDistance) ||
+                           distanceM < _previousRtbHomeDistance - RtbVectorMinClosingMeters;
+            _previousRtbHomeDistance = distanceM;
+
+            bool pointedAtHome = IsPointedAt(snapshot.Player.Position, snapshot.Player.HeadingDeg,
+                home.Position, RtbVectorHeadingToleranceDeg);
             bool inbound = closing && pointedAtHome && snapshot.Player.SpeedMs > 60f;
 
             if (inbound)
@@ -1159,7 +1496,8 @@ namespace RadioChatter.Comms
 
                 _rtbLastInboundAt = snapshot.Time;
             }
-            else if (float.IsNaN(_rtbLastInboundAt) || snapshot.Time - _rtbLastInboundAt > RtbVectorInboundGraceSeconds)
+            else if (float.IsNaN(_rtbLastInboundAt) ||
+                     snapshot.Time - _rtbLastInboundAt > RtbVectorInboundGraceSeconds)
             {
                 _rtbInboundStartedAt = float.NaN;
                 _rtbLastInboundAt = float.NaN;
@@ -1180,7 +1518,8 @@ namespace RadioChatter.Comms
 
         private void DetectVector(Snapshot snapshot)
         {
-            if (!_config.VectorToTargetCalls.Value || !snapshot.HasSelectedTarget || RequestDrivenComms())
+            if (!_config.VectorToTargetCalls.Value || !snapshot.HasSelectedTarget ||
+                RequestDrivenComms() || _routineAwacsQuiet)
                 return;
 
             if (snapshot.Time < _suppressRoutineAwacsUntil)
@@ -1195,7 +1534,8 @@ namespace RadioChatter.Comms
 
         private void DetectPicture(Snapshot snapshot)
         {
-            if (!_config.PictureUpdateCalls.Value || snapshot.Contacts.Count == 0 || RequestDrivenComms())
+            if (!_config.PictureUpdateCalls.Value || snapshot.Contacts.Count == 0 ||
+                RequestDrivenComms() || _routineAwacsQuiet)
                 return;
 
             if (snapshot.Time < _suppressPictureUntil || snapshot.Time < _suppressRoutineAwacsUntil)
@@ -1224,6 +1564,13 @@ namespace RadioChatter.Comms
 
             if (text.Length > 0 && _config.VoiceShowRecognizedText.Value)
                 _output.ShowSubtitle(RadioRole.Player, text, 4f);
+
+            // Ground traffic is addressed directly rather than through Tower/AWACS format.
+            // Acceptances require both callsigns; a decline needs the ground callsign plus
+            // unmistakable negative wording such as "unable".
+            if ((intent.Station == VoiceStation.Unspecified || VoiceIntentParser.IsGroundSupportDecline(text)) &&
+                TryHandleGroundSupportTransmission(text, now))
+                return;
 
             if (TryHandleTowerReadback(text, intent, now))
                 return;
@@ -1260,7 +1607,11 @@ namespace RadioChatter.Comms
                     RespondPicture(snapshot, now, callsign);
                     break;
                 case VoiceIntentKind.RequestVector:
-                    RespondVector(snapshot, now, callsign);
+                    if (!TryRespondNamedGroundSupportVector(snapshot, text, now, callsign))
+                        RespondVector(snapshot, now, callsign);
+                    break;
+                case VoiceIntentKind.RequestVectorGroundSupport:
+                    RespondGroundSupportVector(snapshot, text, now, callsign);
                     break;
                 case VoiceIntentKind.RequestVectorObjective:
                     RespondVectorObjective(snapshot, now, callsign, intent.ObjectiveQuery);
@@ -1270,6 +1621,12 @@ namespace RadioChatter.Comms
                     break;
                 case VoiceIntentKind.RequestVectorHome:
                     RespondVectorHome(snapshot, now, callsign);
+                    break;
+                case VoiceIntentKind.RequestAwacsQuiet:
+                    SetAwacsTrafficMode(AwacsTrafficMode.Quiet, now, callsign);
+                    break;
+                case VoiceIntentKind.RequestAwacsResume:
+                    SetAwacsTrafficMode(AwacsTrafficMode.Normal, now, callsign);
                     break;
                 case VoiceIntentKind.CheckIn:
                     if (intent.Station == VoiceStation.Tower)
@@ -1290,6 +1647,143 @@ namespace RadioChatter.Comms
                         QueueVoiceResponse(RadioRole.Awacs, RadioEventType.VoiceCommandResponse, "say_again_awacs", VoiceSlots(callsign), now);
                     break;
             }
+        }
+
+        private void SetAwacsTrafficMode(AwacsTrafficMode mode, float now, string callsign)
+        {
+            _awacsTrafficMode = mode;
+            string phraseKey = mode == AwacsTrafficMode.Quiet
+                ? "awacs_radio_quiet"
+                : "awacs_radio_resumed";
+            QueueVoiceResponse(RadioRole.Awacs, RadioEventType.VoiceCommandResponse,
+                phraseKey, VoiceSlots(callsign), now);
+            _log.LogInfo($"AWACS traffic mode set to {mode} by player voice command.");
+        }
+
+        private bool TryHandleGroundSupportTransmission(string text, float now)
+        {
+            if (!GroundSupportEnabled())
+                return false;
+
+            bool decline = VoiceIntentParser.IsGroundSupportDecline(text);
+            if (!decline && !VoiceIntentParser.ContainsSpokenCallsign(text, _config.PlayerCallsign.Value))
+                return false;
+
+            GroundSupportGroup selected = null;
+            for (int i = 0; i < _groundSupportGroups.Count; i++)
+            {
+                GroundSupportGroup candidate = _groundSupportGroups[i];
+                if (candidate.Closed || candidate.Dismissed || (!candidate.Pending && !candidate.Accepted))
+                    continue;
+
+                if (VoiceIntentParser.ContainsSpokenCallsign(text, candidate.Callsign))
+                {
+                    selected = candidate;
+                    break;
+                }
+            }
+
+            // The numeric suffix may be omitted while the stem is unique among available
+            // groups: "Anvil, this is Broadsword one-one, inbound" selects Anvil 1. Once two
+            // Anvil groups exist, the player must say the full numbered callsign.
+            if (selected == null)
+            {
+                int stemMatches = 0;
+                for (int i = 0; i < _groundSupportGroups.Count; i++)
+                {
+                    GroundSupportGroup candidate = _groundSupportGroups[i];
+                    if (candidate.Closed || candidate.Dismissed || (!candidate.Pending && !candidate.Accepted))
+                        continue;
+
+                    string stem = GroundSupportCallsignStem(candidate.Callsign);
+                    if (VoiceIntentParser.ContainsSpokenCallsign(text, stem))
+                    {
+                        selected = candidate;
+                        stemMatches++;
+                    }
+                }
+
+                if (stemMatches != 1)
+                    selected = null;
+            }
+
+            if (selected == null)
+                return false;
+
+            if (decline)
+            {
+                DeclineGroundSupport(selected, now);
+                return true;
+            }
+
+            if (selected.Accepted && _activeGroundSupportGroup == selected)
+            {
+                QueueGroundSupportAcknowledgement(selected, _config.PlayerCallsign.Value, now, true);
+                _log.LogInfo($"Ground support follow-up addressed to {selected.Callsign}.");
+                return true;
+            }
+
+            if (_activeGroundSupportGroup != null && _activeGroundSupportGroup != selected)
+            {
+                GroundSupportGroup previous = _activeGroundSupportGroup;
+                previous.Accepted = false;
+                previous.Pending = false;
+                previous.Dismissed = true;
+                previous.DismissedAt = now;
+                RemoveQueuedGroundSupport(previous.Id);
+                _log.LogInfo($"Ground support task switched from {previous.Callsign} to {selected.Callsign}.");
+            }
+
+            _activeGroundSupportGroup = selected;
+            selected.Pending = false;
+            selected.Accepted = true;
+            selected.Dismissed = false;
+            RemoveQueuedGroundSupport(selected.Id);
+            CancelGroundSupportHailAudioAndRescheduleOthers(selected, now);
+
+            // Future player-requested vectors now resolve to this group until another hail is accepted.
+            CancelVectorCalls();
+            _queue.RemoveAll(item => item.Type == RadioEventType.GroundSupportVector);
+            _output.StopTransmissions(RadioEventType.GroundSupportVector);
+            QueueGroundSupportAcknowledgement(selected, _config.PlayerCallsign.Value, now, false);
+            _log.LogInfo($"Ground support request accepted: {selected.Callsign}.");
+            return true;
+        }
+
+        private void DeclineGroundSupport(GroundSupportGroup group, float now)
+        {
+            bool wasActive = _activeGroundSupportGroup == group;
+            group.Pending = false;
+            group.Accepted = false;
+            group.Dismissed = true;
+            group.DismissedAt = now;
+
+            RemoveQueuedGroundSupport(group.Id);
+            CancelGroundSupportHailAudioAndRescheduleOthers(group, now);
+
+            if (wasActive)
+            {
+                _activeGroundSupportGroup = null;
+                _queue.RemoveAll(item => item.Type == RadioEventType.GroundSupportVector);
+                _output.StopTransmissions(RadioEventType.GroundSupportVector);
+            }
+
+            Queue(RadioRole.Game, RadioEventType.GroundSupportDeclined,
+                "ground_support_declined", Slots("ground_callsign", group.Callsign),
+                now, VoiceResponsePriority, 4f, 0f, false,
+                subjectId: group.Id,
+                duplicateWindowSecondsOverride: 0f,
+                bypassStartupHold: true);
+            _log.LogInfo($"Ground support request declined: {group.Callsign}.");
+        }
+
+        private static string GroundSupportCallsignStem(string callsign)
+        {
+            if (string.IsNullOrEmpty(callsign))
+                return string.Empty;
+
+            int separator = callsign.IndexOf(' ');
+            return separator > 0 ? callsign.Substring(0, separator) : callsign;
         }
 
         private void RespondAwacsCheckIn(float now, string callsign)
@@ -1543,6 +2037,143 @@ namespace RadioChatter.Comms
                 QueueContact(snapshot, contact, RadioEventType.PictureUpdate, "awacs_picture", VoiceResponsePriority, 5f, 0f, force: true, callsignOverride: callsign);
             else
                 QueueVoiceResponse(RadioRole.Awacs, RadioEventType.VoiceCommandResponse, "awacs_picture_clean", VoiceSlots(callsign), now);
+        }
+
+        private bool TryRespondNamedGroundSupportVector(Snapshot snapshot, string text, float now, string callsign)
+        {
+            GroundSupportGroup group;
+            bool mentioned;
+            bool ambiguous;
+            ResolveNamedGroundSupportGroup(text, out group, out mentioned, out ambiguous);
+            if (!mentioned)
+                return false;
+
+            if (ambiguous)
+            {
+                QueueVoiceResponse(RadioRole.Awacs, RadioEventType.VoiceCommandResponse,
+                    "awacs_ground_support_ambiguous", VoiceSlots(callsign), now);
+            }
+            else if (group == null)
+            {
+                QueueVoiceResponse(RadioRole.Awacs, RadioEventType.VoiceCommandResponse,
+                    "awacs_no_ground_support", VoiceSlots(callsign), now);
+            }
+            else
+            {
+                QueueGroundSupportVector(snapshot, group, callsign, now);
+            }
+
+            return true;
+        }
+
+        private void RespondGroundSupportVector(Snapshot snapshot, string text, float now, string callsign)
+        {
+            if (TryRespondNamedGroundSupportVector(snapshot, text, now, callsign))
+                return;
+
+            GroundSupportGroup group = null;
+            if (VoiceIntentParser.ContainsSpokenCallsign(text, "secondary"))
+            {
+                if (IsAvailableGroundSupportGroup(_activeGroundSupportGroup))
+                    group = _activeGroundSupportGroup;
+            }
+            else if (VoiceIntentParser.ContainsSpokenCallsign(text, "last support request"))
+            {
+                // "last support request" means the group whose hail most recently reached the
+                // radio queue, whether it is still pending or has already been accepted.
+                group = MostRecentGroundSupportRequest();
+            }
+            else
+            {
+                QueueVoiceResponse(RadioRole.Awacs, RadioEventType.VoiceCommandResponse,
+                    "awacs_ground_support_reference_required", VoiceSlots(callsign), now);
+                return;
+            }
+
+            if (group != null)
+            {
+                QueueGroundSupportVector(snapshot, group, callsign, now);
+            }
+            else
+            {
+                QueueVoiceResponse(RadioRole.Awacs, RadioEventType.VoiceCommandResponse,
+                    "awacs_no_ground_support", VoiceSlots(callsign), now);
+            }
+        }
+
+        private void ResolveNamedGroundSupportGroup(
+            string text,
+            out GroundSupportGroup selected,
+            out bool mentioned,
+            out bool ambiguous)
+        {
+            selected = null;
+            mentioned = false;
+            ambiguous = false;
+
+            // Prefer a full numbered reference. Requiring "to" prevents a player callsign such
+            // as Ranger 1-1 from being mistaken for the destination of an ordinary vector call.
+            for (int i = 0; i < _groundSupportGroups.Count; i++)
+            {
+                GroundSupportGroup candidate = _groundSupportGroups[i];
+                if (!VoiceIntentParser.ContainsSpokenCallsign(text, "to " + candidate.Callsign))
+                    continue;
+
+                mentioned = true;
+                if (IsAvailableGroundSupportGroup(candidate))
+                    selected = candidate;
+                return;
+            }
+
+            int matches = 0;
+            for (int stemIndex = 0; stemIndex < GroundSupportCallsigns.Length; stemIndex++)
+            {
+                string stem = GroundSupportCallsigns[stemIndex];
+                if (!VoiceIntentParser.ContainsSpokenCallsign(text, "to " + stem))
+                    continue;
+
+                mentioned = true;
+                for (int i = 0; i < _groundSupportGroups.Count; i++)
+                {
+                    GroundSupportGroup candidate = _groundSupportGroups[i];
+                    if (!IsAvailableGroundSupportGroup(candidate) ||
+                        GroundSupportCallsignStem(candidate.Callsign) != stem)
+                    {
+                        continue;
+                    }
+
+                    selected = candidate;
+                    matches++;
+                }
+            }
+
+            if (matches > 1)
+            {
+                selected = null;
+                ambiguous = true;
+            }
+        }
+
+        private GroundSupportGroup MostRecentGroundSupportRequest()
+        {
+            GroundSupportGroup newest = null;
+            float newestHail = float.NegativeInfinity;
+            for (int i = 0; i < _groundSupportGroups.Count; i++)
+            {
+                GroundSupportGroup candidate = _groundSupportGroups[i];
+                if (!IsAvailableGroundSupportGroup(candidate) || candidate.LastHailAt < newestHail)
+                    continue;
+
+                newest = candidate;
+                newestHail = candidate.LastHailAt;
+            }
+
+            return newest;
+        }
+
+        private static bool IsAvailableGroundSupportGroup(GroundSupportGroup group)
+        {
+            return group != null && !group.Closed && !group.Dismissed && (group.Pending || group.Accepted);
         }
 
         private void RespondVector(Snapshot snapshot, float now, string callsign)
@@ -2059,7 +2690,7 @@ namespace RadioChatter.Comms
             return AbsDelta(headingDeg, GPos.Bearing(origin, target)) <= toleranceDeg;
         }
 
-        private void ResetSession()
+        private void ResetSession(bool preserveGroundSupport = false)
         {
             ResetForAircraft(0);
             _announcedContacts.Clear();
@@ -2076,6 +2707,8 @@ namespace RadioChatter.Comms
             _suppressRoutineAwacsUntil = 0f;
             _lastMissileWarnAt = float.NegativeInfinity;
             DisableBattlefieldChatter();
+            if (!preserveGroundSupport)
+                DisableGroundSupportRequests();
         }
 
         private void ResetForAircraft(int aircraftInstanceId)
@@ -2115,8 +2748,15 @@ namespace RadioChatter.Comms
             _previousRtbHomeDistance = float.NaN;
             _rtbInboundStartedAt = float.NaN;
             _rtbLastInboundAt = float.NaN;
+            _routineAwacsQuiet = false;
+            _awacsTrafficMode = AwacsTrafficMode.Automatic;
             ClearPlayerWeaponHoldState();
             _queue.Clear();
+            for (int i = 0; i < _groundSupportGroups.Count; i++)
+            {
+                if (_groundSupportGroups[i].Pending)
+                    _groundSupportGroups[i].NextHailAt = 0f;
+            }
             _suppressPictureUntil = 0f;
             _suppressRoutineAwacsUntil = 0f;
             _lastMissileWarnAt = float.NegativeInfinity;
@@ -2192,11 +2832,36 @@ namespace RadioChatter.Comms
             public int Importance;
         }
 
+        private sealed class GroundSupportGroup
+        {
+            public uint Id;
+            public uint AnchorUnitId;
+            public string Callsign;
+            public GPos Position;
+            public readonly HashSet<uint> MemberIds = new HashSet<uint>();
+            public float LastAttackAt;
+            public float LastSeenAliveAt;
+            public float LastHailAt;
+            public float NextHailAt;
+            public float DismissedAt;
+            public bool Pending;
+            public bool Accepted;
+            public bool Dismissed;
+            public bool Closed;
+        }
+
         private enum ContactAspect
         {
             Hot,
             Flanking,
             Cold
+        }
+
+        private enum AwacsTrafficMode
+        {
+            Automatic,
+            Quiet,
+            Normal
         }
 
         private struct ContactInfoRecord

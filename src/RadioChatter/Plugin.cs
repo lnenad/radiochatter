@@ -91,6 +91,7 @@ namespace RadioChatter
         public readonly ConfigEntry<float> Volume;
         public readonly ConfigEntry<bool> RadioEffectEnabled;
         public readonly ConfigEntry<float> NoiseLevel;
+        public readonly ConfigEntry<float> PushToTalkReceiveVolume;
         public readonly ConfigEntry<int> MaxConcurrentTransmissions;
         public readonly ConfigEntry<string> TowerVoice;
         public readonly ConfigEntry<string> AwacsVoice;
@@ -116,6 +117,10 @@ namespace RadioChatter
         public readonly ConfigEntry<bool> InGameComms;
         public readonly ConfigEntry<bool> RtbCalls;
         public readonly ConfigEntry<bool> BattlefieldChatter;
+        public readonly ConfigEntry<bool> GroundSupportRequests;
+        public readonly ConfigEntry<float> GroundSupportGroupRadiusM;
+        public readonly ConfigEntry<float> GroundSupportRepeatSeconds;
+        public readonly ConfigEntry<bool> QuietAwacsWhenWinchester;
 
         // Voice commands
         public readonly ConfigEntry<bool> VoiceCommandsEnabled;
@@ -153,6 +158,10 @@ namespace RadioChatter
             RadioEffectEnabled = f.Bind("Audio", "RadioEffectEnabled", true, "Apply subtle bandpass/noise radio processing.");
             NoiseLevel = f.Bind("Audio", "NoiseLevel", 0.015f,
                 new ConfigDescription("Background transmission hiss amount. Applied very lightly.", new AcceptableValueRange<float>(0f, 0.2f)));
+            PushToTalkReceiveVolume = f.Bind("Audio", "PushToTalkReceiveVolume", 0.25f,
+                new ConfigDescription(
+                    "Incoming-radio volume multiplier while the push-to-talk key is held. Zero mutes receive audio; one disables ducking.",
+                    new AcceptableValueRange<float>(0f, 1f)));
             MaxConcurrentTransmissions = f.Bind("Audio", "MaxConcurrentTransmissions", 3,
                 new ConfigDescription("Maximum RadioChatter voice clips that may overlap.", new AcceptableValueRange<int>(1, 6)));
             TowerVoice = f.Bind("Audio", "TowerVoice", "tower", "Pocket TTS voice id used for Tower.");
@@ -184,9 +193,21 @@ namespace RadioChatter
             RtbCalls = f.Bind("Callouts", "RtbCalls", true, "Low-fuel and sustained inbound return-to-base advisories.");
             BattlefieldChatter = f.Bind("Callouts", "BattlefieldChatter", false,
                 "Low-priority allied-aircraft chatter for weapon releases, defensive reactions, takeoffs/landings, and losses. Globally rate-limited and dropped when stale to keep TTS and radio load low.");
+            GroundSupportRequests = f.Bind("Callouts", "GroundSupportRequests", true,
+                "Friendly ground groups under hostile fire may broadcast a general request for air support. Requires voice commands so requests can be accepted.");
+            GroundSupportGroupRadiusM = f.Bind("Callouts", "GroundSupportGroupRadiusM", 1000f,
+                new ConfigDescription(
+                    "Attacked friendly ground vehicles inside this radius share one persistent group callsign and one support request.",
+                    new AcceptableValueRange<float>(250f, 5000f)));
+            GroundSupportRepeatSeconds = f.Bind("Callouts", "GroundSupportRepeatSeconds", 120f,
+                new ConfigDescription(
+                    "Seconds between repeated hails from a ground group whose request has not been accepted.",
+                    new AcceptableValueRange<float>(60f, 300f)));
+            QuietAwacsWhenWinchester = f.Bind("Callouts", "QuietAwacsWhenWinchester", true,
+                "Suppress automatic new-contact, picture, target-vector, and periodic RTB-vector calls after all offensive weapons are expended. Returning to base is never inferred; use the radio-quiet voice command when desired. Requested AWACS replies and urgent calls remain available.");
 
             VoiceCommandsEnabled = f.Bind("VoiceCommands", "Enabled", true,
-                "Push-to-talk voice commands: request takeoff/landing clearance, AWACS picture, vectors, radio check. Needs a microphone; speech is transcribed locally by the sidecar.");
+                "Push-to-talk voice commands: request takeoff/landing clearance, AWACS picture, vectors, radio quiet/resume, and radio checks. Needs a microphone; speech is transcribed locally by the sidecar.");
             VoiceRequireProperCalls = f.Bind("VoiceCommands", "RequireProperCalls", true,
                 "Require proper radio format: station, callsign, request — e.g. \"Tower, Falcon 1-1, request takeoff\" or \"Overwatch, this is Falcon 1-1, request picture\". Improper calls get a corrective reply instead of an answer.");
             VoiceRequireTowerReadbacks = f.Bind("VoiceCommands", "RequireTowerReadbacks", false,

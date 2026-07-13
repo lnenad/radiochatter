@@ -10,9 +10,12 @@ namespace RadioChatter.Comms
         RequestLanding,
         RequestPicture,
         RequestVector,
+        RequestVectorGroundSupport,
         RequestVectorObjective,
         RequestObjectiveList,
         RequestVectorHome,
+        RequestAwacsQuiet,
+        RequestAwacsResume,
         CheckIn,
         RadioCheck
     }
@@ -59,6 +62,9 @@ namespace RadioChatter.Comms
             "vector", "bearing", "steer", "heading", "intercept", "target", "bandit",
             "objective", "objectives", "list", "tasking", "status", "current", "active", "available", "all",
             "picture", "bogey", "bogie", "dope", "contacts", "threats", "situation", "scope",
+            "quiet", "silence", "silent", "stop", "hold", "go", "cancel", "terminate", "minimize", "minimise",
+            "resume", "restore", "normal", "emergency", "essential",
+            "call", "calls", "callout", "callouts", "traffic",
             "say", "need", "want", "give", "what", "on", "for", "with", "at", "to"
         };
 
@@ -93,6 +99,18 @@ namespace RadioChatter.Comms
                 : string.Empty;
 
             return intent;
+        }
+
+        /// <summary>Natural negative replies used to turn down a ground-support request.
+        /// This intentionally sits outside station/callsign grammar: "Hammer four, unable"
+        /// needs only the ground callsign.</summary>
+        public static bool IsGroundSupportDecline(string transcript)
+        {
+            string text = Normalize(transcript);
+            return HasAny(text,
+                "unable", "negative", "decline", "declining",
+                "cannot assist", "cant assist", "cannot help", "cant help",
+                "not able", "not available", "no can do");
         }
 
         /// <summary>Station address at the very start of the utterance: "tower ...",
@@ -267,6 +285,39 @@ namespace RadioChatter.Comms
             return score * 2 > queryTokens.Length;
         }
 
+        /// <summary>Token-aware callsign lookup with digit-word folding, so "Anvil one" and
+        /// "Anvil 1" identify the same persistent ground group without substring accidents.</summary>
+        public static bool ContainsSpokenCallsign(string transcript, string callsign)
+        {
+            string normalizedTranscript = Normalize(transcript);
+            string normalizedCallsign = Normalize(callsign);
+            if (normalizedTranscript.Length == 0 || normalizedCallsign.Length == 0)
+                return false;
+
+            string[] transcriptTokens = normalizedTranscript.Split(' ');
+            string[] callsignTokens = normalizedCallsign.Split(' ');
+            if (callsignTokens.Length > transcriptTokens.Length)
+                return false;
+
+            for (int start = 0; start + callsignTokens.Length <= transcriptTokens.Length; start++)
+            {
+                bool match = true;
+                for (int i = 0; i < callsignTokens.Length; i++)
+                {
+                    if (FoldNumberToken(transcriptTokens[start + i]) != FoldNumberToken(callsignTokens[i]))
+                    {
+                        match = false;
+                        break;
+                    }
+                }
+
+                if (match)
+                    return true;
+            }
+
+            return false;
+        }
+
         private static string[] SignificantTokens(string normalized)
         {
             if (normalized.Length == 0)
@@ -344,6 +395,26 @@ namespace RadioChatter.Comms
             if (text.Length == 0)
                 return VoiceIntentKind.Unknown;
 
+            // Restore phrases must win over quiet phrases because "cancel radio quiet"
+            // intentionally contains the word "quiet".
+            if (HasAny(text,
+                "resume calls", "resume callouts", "resume awacs", "restore calls", "restore callouts",
+                "resume normal calls", "normal comms", "normal communications", "normal traffic", "radio normal",
+                "cancel radio quiet", "cancel quiet comms", "terminate radio quiet"))
+            {
+                return VoiceIntentKind.RequestAwacsResume;
+            }
+
+            if (HasAny(text,
+                "radio quiet", "quiet radio", "quiet comms", "quiet communications",
+                "quiet awacs", "minimize calls", "minimise calls", "minimize awacs", "minimise awacs",
+                "stop callouts", "stop awacs calls", "stop awacs callouts", "hold awacs calls",
+                "silence awacs", "awacs silence", "go quiet",
+                "emergency traffic only", "essential traffic only"))
+            {
+                return VoiceIntentKind.RequestAwacsQuiet;
+            }
+
             if (HasAny(text, "radio check", "comm check", "comms check", "mic check", "how do you read"))
                 return VoiceIntentKind.RadioCheck;
 
@@ -357,6 +428,9 @@ namespace RadioChatter.Comms
             bool wantsVector = HasAny(text, "vector", "bearing", "steer", "heading to", "intercept");
             if (wantsVector && wantsHome)
                 return VoiceIntentKind.RequestVectorHome;
+
+            if (wantsVector && HasAny(text, "support", "secondary"))
+                return VoiceIntentKind.RequestVectorGroundSupport;
 
             // "vector to objective" / "request objective" — the mission objective, as opposed
             // to "vector to target", which is the locked/nearest contact. A plural or an

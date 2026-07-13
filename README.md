@@ -52,6 +52,8 @@ mod disables itself rather than read state it does not own.
 - Missile-threat warnings, kill confirmations, bingo-fuel and RTB advisories.
 - Smart de-duplication: calls about the same contact share a cooldown, stale calls are dropped
   the moment they would play (destroyed target, expired info, already-covered contact).
+- Automatic contact chatter quiets once the player is Winchester, or on the explicit voice command
+  *"radio quiet"*. Urgent warnings and player-requested replies remain available.
 
 **Player / pilot**
 - Weapon-release calls: `fox one!`, `fox two!`, `fox three!`, `rifle!`, `magnum!`, `pickle!`,
@@ -68,10 +70,15 @@ mod disables itself rather than read state it does not own.
   voiced on a separate wingman channel.
 - Optional allied battlefield chatter reacts to real weapon releases, defensive reactions,
   takeoffs, landings, and aircraft losses without delaying higher-priority radio traffic.
+- Friendly ground groups under hostile fire broadcast a general support request with a persistent
+  callsign and a simple bearing/range location. Nearby vehicles share one request, preventing a
+  platoon from flooding the radio. Address the group using both callsigns, then ask AWACS for vectors.
 
 **Voice commands (push-to-talk)**
 - Hold the push-to-talk key (default `Right Alt`), speak, release — your speech is transcribed
   locally by the sidecar (faster-whisper, no cloud) and answered in character.
+- Incoming radio voices are reduced to 25% while push-to-talk is held, keeping the player's own
+  transmission intelligible. The receive-volume multiplier is configurable.
 - Accidental silent push-to-talk presses are discarded: voice activity detection must produce
   actual words before any player radio event is transmitted.
 - Proper radio format is required by default: **station, callsign, request** —
@@ -113,6 +120,21 @@ mod disables itself rather than read state it does not own.
     the objective names — no need to recite *"Destroy the radar site at Kowal"* verbatim.
     A reference that matches nothing gets *"say again objective name"*.
   - *"...vector to home plate"* / *"request RTB"* → bearing and range to base.
+  - *"Overwatch, Falcon 1-1, radio quiet"* → suppress routine automatic AWACS contact, picture,
+    target-vector, and periodic RTB-vector calls. Flight direction is never used to infer this.
+  - *"Overwatch, Falcon 1-1, resume calls"* / *"cancel radio quiet"* → restore normal automatic
+    AWACS traffic, even if the aircraft is Winchester.
+  - *"Anvil, this is Falcon 1-1, inbound, hold on"* → accept Anvil's support request. The wording
+    is free-form; the transmission only needs the ground and player callsigns. The group number
+    may be omitted while that callsign stem is unambiguous. The ground unit acknowledges and may
+    ask for an ETA. Accepting another group cancels the previous support task.
+  - *"Hammer 4, unable"* / *"negative Anvil, cannot assist"* → decline that request. A decline
+    only needs the ground callsign and natural negative wording; the group acknowledges and stops
+    hailing unless a genuinely new engagement begins after a quiet interval.
+  - *"Overwatch, Falcon 1-1, request vector to Anvil"*, *"...vector to last support request"*,
+    or *"...vector to secondary"* → AWACS gives that ground group's current bearing and range.
+    A plain *"request vector"* keeps its original meaning (your selected or nearest air target),
+    and ground-support vectors are never sent automatically.
   - *"...airborne, checking in"* / *"...with you"* → AWACS radar-contact acknowledgement.
   - *"...radio check"* → *"read you five by five"*.
   - A proper call the controller cannot make out gets an in-character *"say again"*.
@@ -273,6 +295,7 @@ when the game exits (`StopSidecarOnExit`); a sidecar you started manually is nev
 | `Volume` | `0.8` | Voice playback volume. |
 | `RadioEffectEnabled` | `true` | Applies the radio effect to generated clips. |
 | `NoiseLevel` | `0.015` | Very light transmission hiss amount. |
+| `PushToTalkReceiveVolume` | `0.25` | Incoming-radio volume multiplier while push-to-talk is held. `0` mutes receive audio; `1` disables ducking. |
 | `MaxConcurrentTransmissions` | `3` | Max different radio channels that may overlap. |
 | `TowerVoice` | `tower` | Sidecar voice alias for tower calls. |
 | `AwacsVoice` | `awacs` | Sidecar voice alias for AWACS calls. |
@@ -306,6 +329,10 @@ Same-channel chatter is serialized regardless of `MaxConcurrentTransmissions`.
 | `InGameComms` | `true` | Reads mission-scripted comms through the wingman voice. |
 | `RtbCalls` | `true` | Low-fuel and sustained inbound return-to-base advisories. |
 | `BattlefieldChatter` | `false` | Opt-in allied-aircraft chatter for weapon releases, defensive reactions, takeoffs/landings, and losses. One ambient call can be selected every 18 seconds; events expire while the radio is busy instead of building a TTS backlog. |
+| `GroundSupportRequests` | `true` | Friendly ground groups under hostile fire broadcast a general request for air support. Requires voice commands so requests can be accepted. |
+| `GroundSupportGroupRadiusM` | `1000` | Vehicles within this radius share one mission-persistent ground callsign and request. |
+| `GroundSupportRepeatSeconds` | `120` | Repeat interval for an unaccepted support hail. |
+| `QuietAwacsWhenWinchester` | `true` | Quiet automatic new-contact, picture, target-vector, and periodic RTB-vector chatter when out of offensive weapons. Returning home is never inferred; use *"radio quiet"* explicitly. Missile/bingo warnings and requested replies still work. |
 
 </details>
 
@@ -390,8 +417,9 @@ The format is one array of template variants per event key:
 
 A random variant is picked per call, avoiding the last-used one. `{slot}` placeholders are
 filled per event; the available slots are `{callsign}`, `{awacs}`, `{runway}`, `{bearing}`,
-`{bearing_clause}`, `{range}`, `{altitude}`, `{altitude_clause}`, `{aspect}`, and `{type}`
-(which keys receive which slots matches the built-in file). Write numbers as words — text is
+`{bearing_clause}`, `{range}`, `{altitude}`, `{altitude_clause}`, `{aspect}`, and `{type}`, plus
+`{ground_callsign}` for ground-support keys (which keys receive which slots matches the built-in
+file). Write numbers as words — text is
 sent to TTS as-is.
 
 The BepInEx log reports which source was loaded, e.g.
@@ -463,6 +491,47 @@ screen. Nothing is skipped or lost because of a pause.
 - Splash/good-effect calls use the local kill display event.
 - RTB calls include a one-time bingo-fuel advisory below about 18 percent fuel and a
   home-plate vector after roughly 18 seconds of sustained inbound flight from 18-90 km out.
+- With `QuietAwacsWhenWinchester` enabled, live offensive weapon-station ammunition suppresses
+  automatic new-contact, picture, target-vector, and periodic RTB-vector chatter once all weapons
+  are expended. Flight direction is never interpreted as a desire for radio silence.
+- The player can explicitly request the same quiet mode with *"Overwatch, Falcon 1-1, radio quiet"*
+  and restore normal traffic with *"resume calls"* or *"cancel radio quiet"*. Missile warnings,
+  bingo fuel, kill confirmations, ground traffic, and all push-to-talk requests still pass through.
+
+</details>
+
+<details>
+<summary><strong>Ground-support request logic</strong></summary>
+
+- A request can begin when a hostile weapon station fires at a friendly `GroundVehicle`, or
+  when positive damage with hostile attribution is recorded. The damage hook covers unguided
+  and area weapons whose launch did not carry an explicit target.
+- Attacks are clustered around the first vehicle in a `GroundSupportGroupRadiusM` radius.
+  Vehicles in that cluster share one callsign (`Anvil`, `Hammer`, `Bison`, `Ranger`,
+  `Sentinel`, or `Nomad`, with a persistent number) for the rest of the mission.
+- The hail is addressed to any available aircraft rather than directly to the player. It gives
+  bearing and range from the player's current position and explains how to respond. The reply may
+  use any natural wording, but must contain both the ground callsign and the configured player
+  callsign. The group's numeric suffix may be omitted while its stem is unique among available
+  requests.
+- Unaccepted groups repeat their request every `GroundSupportRepeatSeconds`. Fire from another
+  vehicle in the same cluster updates the existing group instead of creating another hail.
+- A player can decline with the ground callsign plus broad negative wording, such as *"Hammer 4,
+  unable"*, without also reciting the player callsign. The local request is dismissed and will not
+  repeat under continuous fire; the same persistent group may call again only after a full quiet
+  interval followed by a new attack.
+- Accepting a request makes it the active secondary support task. The ground unit acknowledges,
+  with responses such as *"roger, please hurry"* or *"what is your ETA?"*. Further transmissions
+  containing both callsigns receive a short ground acknowledgement. Automatic pilot
+  acknowledgements are suppressed for ground traffic and questions, so an ETA request waits for
+  the player's actual reply.
+- AWACS does not send automatic support updates. Ask for *"vector to Anvil"* (or another ground
+  callsign), *"vector to last support request"*, or *"vector to secondary"* to get the requested
+  group's current bearing/range. A plain *"request vector"* remains reserved for the selected or
+  nearest air target. Accepting a different group dismisses the previous task and makes it the
+  new secondary.
+- If no living friendly ground vehicle remains in the group, queued guidance is removed and
+  AWACS cancels the support task. Missile warnings and other urgent traffic retain priority.
 
 </details>
 

@@ -50,6 +50,8 @@ namespace RadioChatter.Game
         public bool GearDown;
         public bool Grounded;            // gear down + ~0 AGL (debounced by detectors, raw here)
         public float FuelFraction;       // 0..1
+        public bool WeaponAmmoKnown;     // at least one offensive weapon station was found
+        public bool HasUsableWeapons;    // offensive station still has ammunition
         public bool Ejected;
         public bool Destroyed;
     }
@@ -102,6 +104,7 @@ namespace RadioChatter.Game
         public GPos Position;
         public bool Disabled;
         public bool IsAircraft;
+        public bool IsGroundVehicle;
         public bool IsMissile;
         public bool IsFriendly;
         public bool IsPlayer;

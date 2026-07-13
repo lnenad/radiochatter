@@ -27,8 +27,9 @@ namespace RadioChatter
         public static void Tick()
         {
             _poller?.Tick();
-            _output?.Tick();
             _voice?.Tick();
+            _output?.SetPushToTalkActive(_voice != null && _voice.IsPushToTalkHeld);
+            _output?.Tick();
             ImmersionMapOptions.Tick(_config);
         }
 
