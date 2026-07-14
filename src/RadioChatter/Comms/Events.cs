@@ -3,55 +3,7 @@ using RadioChatter.Game;
 
 namespace RadioChatter.Comms
 {
-    internal enum RadioRole
-    {
-        Tower,
-        Awacs,
-        Player,
-        PlayerTower,
-        PlayerFlight,
-        PlayerAwacs,
-        Game,
-        System
-    }
-
-    internal enum RadioEventType
-    {
-        PlayerAircraftChanged,
-        PlayerAircraftDestroyed,
-        UnitDestroyed,
-        PlayerKill,
-        MissileThreat,
-        SortieSuccessful,
-        NewContact,
-        TowerTakeoff,
-        TowerAirborne,
-        TowerApproach,
-        TowerFinal,
-        TowerLanded,
-        RtbFuel,
-        RtbVector,
-        VectorToTarget,
-        PictureUpdate,
-        PlayerWeaponCall,
-        PlayerDefensiveCall,
-        PlayerEjectionCall,
-        PlayerAcknowledgement,
-        FriendlyWeaponCall,
-        FriendlyDefensiveCall,
-        BattlefieldChatter,
-        GroundUnitUnderAttack,
-        GroundSupportHail,
-        GroundSupportAcknowledged,
-        GroundSupportVector,
-        GroundSupportDeclined,
-        GroundSupportCompleted,
-        GroundSupportCanceled,
-        InGameComms,
-        PlayerVoiceCommand,
-        TowerReadbackRequired,
-        VoiceCommandResponse
-    }
+    // RadioRole / RadioEventType live in RadioTypes.cs so Unity-free code can use them.
 
     internal struct RadioEvent
     {

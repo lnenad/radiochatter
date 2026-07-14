@@ -88,13 +88,15 @@ def _audio_to_wav_bytes(sample_rate: int, audio) -> bytes:
     return buf.getvalue()
 
 
-class EngineState:
-    """Shared load status the HTTP handlers report while the model loads in the background."""
+class LoadState:
+    """Shared load status the HTTP handlers report while an engine loads in the
+    background. One instance per engine (TTS and STT) so the two paths cannot
+    drift apart."""
 
     def __init__(self):
         self.lock = threading.Lock()
-        self.engine: PocketTtsEngine | None = None
-        self.status = "loading"  # loading | ok | error
+        self.engine = None
+        self.status = "loading"  # loading | ok | error | disabled
         self.error = ""
 
     def snapshot(self):
@@ -102,7 +104,7 @@ class EngineState:
             return self.engine, self.status, self.error
 
 
-STATE = EngineState()
+STATE = LoadState()
 
 # The TTS and STT loader threads import overlapping dependency graphs (beartype,
 # typing_extensions, huggingface_hub, ...). Concurrent first-time imports of the same
@@ -168,26 +170,29 @@ class _ThreadingProxy:
 
 def _patch_pocket_tts_threading() -> None:
     """Make Pocket TTS run its per-call worker threads on the persistent pool."""
+    import types
+
     from pocket_tts.models import tts_model
 
+    # This only intercepts thread creation while tts_model resolves Thread through its
+    # module-level `threading` name. A pocket-tts upgrade that switches to
+    # `from threading import Thread` would silently bypass the proxy and bring the
+    # per-call native-memory leak back — detect that and say so at startup.
+    if getattr(tts_model, "Thread", None) is not None:
+        _log("WARNING: pocket_tts.models.tts_model imports Thread directly; the "
+             "thread-pool patch cannot intercept it and per-call torch threads will "
+             "leak native memory again (see plan/PocketTtsMemoryInvestigation.md).")
+    elif not isinstance(getattr(tts_model, "threading", None), types.ModuleType):
+        _log("WARNING: pocket_tts.models.tts_model no longer has a module-level "
+             "'threading' import; the thread-pool patch may have no effect "
+             "(see plan/PocketTtsMemoryInvestigation.md).")
+
     tts_model.threading = _ThreadingProxy()
+    _log("Pocket TTS threading patched to use the persistent worker pool.")
 
 
-class SttState:
-    """Shared speech-to-text load status, independent of the TTS engine."""
-
-    def __init__(self):
-        self.lock = threading.Lock()
-        self.engine: WhisperSttEngine | None = None
-        self.status = "loading"  # loading | ok | error | disabled
-        self.error = ""
-
-    def snapshot(self):
-        with self.lock:
-            return self.engine, self.status, self.error
-
-
-STT_STATE = SttState()
+# Speech-to-text load status, independent of the TTS engine.
+STT_STATE = LoadState()
 
 
 def _cache_is_warm() -> bool:
@@ -279,38 +284,6 @@ class WhisperSttEngine:
         return " ".join(segment.text.strip() for segment in segments).strip()
 
 
-def _load_stt_background(model_name: str) -> None:
-    """Load the STT model on its own thread; keep retrying like the TTS loader so a
-    transient first-run download failure recovers without a restart."""
-    while True:
-        with STT_STATE.lock:
-            STT_STATE.status = "loading"
-        try:
-            try:
-                engine = WhisperSttEngine(model_name)
-            except Exception as exc:
-                if os.environ.get("HF_HUB_OFFLINE") == "1":
-                    raise
-                _log(f"STT model load failed ({type(exc).__name__}: {exc}); retrying with HF_HUB_OFFLINE=1...")
-                _force_hf_offline()
-                engine = WhisperSttEngine(model_name)
-        except Exception as exc:
-            message = f"{type(exc).__name__}: {exc}"
-            with STT_STATE.lock:
-                STT_STATE.status = "error"
-                STT_STATE.error = message
-            _log(f"STT model load failed: {message}; retrying in 60s...")
-            time.sleep(60)
-            continue
-
-        with STT_STATE.lock:
-            STT_STATE.engine = engine
-            STT_STATE.status = "ok"
-            STT_STATE.error = ""
-        _log(f"Loaded STT model: {model_name}")
-        return
-
-
 class Handler(BaseHTTPRequestHandler):
     server_version = "RadioChatterPocketTTS/0.1"
 
@@ -359,7 +332,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(404)
             return
 
-        engine, status, error = STATE.snapshot()
+        engine, _status, error = STATE.snapshot()
         if engine is None:
             self._json(503, {"error": error or "voice model is not ready yet"})
             return
@@ -428,43 +401,44 @@ def _force_hf_offline() -> None:
         pass
 
 
-def _create_engine(voices: Dict[str, str], language: str | None) -> PocketTtsEngine:
-    """Load the engine, falling back to HF offline mode so a warm cache still boots
+def _create_with_offline_fallback(factory, label: str):
+    """Load an engine, falling back to HF offline mode so a warm cache still boots
     when huggingface.co is unreachable or a download stalls."""
     try:
-        return PocketTtsEngine(voices, language)
+        return factory()
     except Exception as exc:
         if os.environ.get("HF_HUB_OFFLINE") == "1":
             raise
-        _log(f"Model load failed ({type(exc).__name__}: {exc}); retrying with HF_HUB_OFFLINE=1...")
+        _log(f"{label} load failed ({type(exc).__name__}: {exc}); retrying with HF_HUB_OFFLINE=1...")
         _force_hf_offline()
-        return PocketTtsEngine(voices, language)
+        return factory()
 
 
-def _load_engine_background(voices: Dict[str, str], language: str | None) -> None:
-    """Load the model on a background thread so /health can answer immediately.
+def _load_background(state: LoadState, factory, label: str, loaded_message) -> None:
+    """Load an engine on a background thread so /health can answer immediately.
 
     Keeps retrying every 60s so a transient failure (no internet on first run)
-    recovers without a game restart."""
+    recovers without a game restart. Shared by the TTS and STT loaders so the two
+    retry/fallback paths cannot diverge."""
     while True:
-        with STATE.lock:
-            STATE.status = "loading"
+        with state.lock:
+            state.status = "loading"
         try:
-            engine = _create_engine(voices, language)
+            engine = _create_with_offline_fallback(factory, label)
         except Exception as exc:
             message = f"{type(exc).__name__}: {exc}"
-            with STATE.lock:
-                STATE.status = "error"
-                STATE.error = message
-            _log(f"Model load failed: {message}; retrying in 60s...")
+            with state.lock:
+                state.status = "error"
+                state.error = message
+            _log(f"{label} load failed: {message}; retrying in 60s...")
             time.sleep(60)
             continue
 
-        with STATE.lock:
-            STATE.engine = engine
-            STATE.status = "ok"
-            STATE.error = ""
-        _log(f"Loaded voices: {', '.join(engine.voice_names)}")
+        with state.lock:
+            state.engine = engine
+            state.status = "ok"
+            state.error = ""
+        _log(loaded_message(engine))
         return
 
 
@@ -489,14 +463,30 @@ def main() -> int:
 
     _log("Loading Pocket TTS model and voices in the background...")
     loader = threading.Thread(
-        target=_load_engine_background, args=(voices, args.language), name="model-loader", daemon=True
+        target=_load_background,
+        args=(
+            STATE,
+            lambda: PocketTtsEngine(voices, args.language),
+            "Model",
+            lambda engine: f"Loaded voices: {', '.join(engine.voice_names)}",
+        ),
+        name="model-loader",
+        daemon=True,
     )
     loader.start()
 
     if args.stt_model:
         _log(f"Loading speech-to-text model '{args.stt_model}' in the background...")
         stt_loader = threading.Thread(
-            target=_load_stt_background, args=(args.stt_model,), name="stt-loader", daemon=True
+            target=_load_background,
+            args=(
+                STT_STATE,
+                lambda: WhisperSttEngine(args.stt_model),
+                "STT model",
+                lambda engine: f"Loaded STT model: {args.stt_model}",
+            ),
+            name="stt-loader",
+            daemon=True,
         )
         stt_loader.start()
     else:

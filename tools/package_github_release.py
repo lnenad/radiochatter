@@ -46,10 +46,24 @@ def run_build(root: Path, configuration: str, game_dir: str | None) -> None:
     subprocess.run(command, cwd=root, check=True)
 
 
+def read_sidecar_manifest(root: Path) -> list[str]:
+    """File list from sidecar/MANIFEST — the single source of truth shared with
+    build.ps1 and build.sh."""
+    manifest = root / "sidecar" / "MANIFEST"
+    names = []
+    for line in manifest.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line and not line.startswith("#"):
+            names.append(line)
+    if not names:
+        raise RuntimeError(f"{manifest} lists no files")
+    return names
+
+
 def copy_sidecar(root: Path, target: Path) -> None:
     sidecar = root / "sidecar"
     target.mkdir(parents=True, exist_ok=True)
-    for name in ("server.py", "requirements.txt", "voices.json", "run_sidecar.bat", "run_sidecar.sh"):
+    for name in read_sidecar_manifest(root):
         source = sidecar / name
         destination = target / name
         if source.suffix.lower() == ".bat":
@@ -77,17 +91,18 @@ def stage_payload_from_build(root: Path, stage: Path, configuration: str) -> Non
     copy_sidecar(root, stage / "sidecar")
 
 
-def stage_payload_from_source(source: Path, stage: Path) -> None:
+def stage_payload_from_source(root: Path, source: Path, stage: Path) -> None:
+    """Stage the prebuilt DLL from the payload source, but always take the sidecar
+    from sidecar/ in the repo — a committed payload copy of it could silently drift."""
     source = source.resolve()
     if not (source / "RadioChatter.dll").exists():
         raise RuntimeError(f"Payload source is missing RadioChatter.dll: {source}")
-    if not (source / "sidecar").is_dir():
-        raise RuntimeError(f"Payload source is missing sidecar/: {source}")
 
     if stage.exists():
         shutil.rmtree(stage)
-    shutil.copytree(source, stage)
-    normalize_windows_batch_files(stage)
+    stage.mkdir(parents=True)
+    shutil.copy2(source / "RadioChatter.dll", stage / "RadioChatter.dll")
+    copy_sidecar(root, stage / "sidecar")
 
 
 def stage_payload_with_models(payload: Path, model_cache: Path, stage: Path) -> None:
@@ -192,7 +207,7 @@ def main() -> int:
     output_dir = Path(args.output_dir).resolve()
     payload = output_dir / "github" / "payload"
     if args.payload_source:
-        stage_payload_from_source(Path(args.payload_source), payload)
+        stage_payload_from_source(root, Path(args.payload_source), payload)
     else:
         stage_payload_from_build(root, payload, args.configuration)
 

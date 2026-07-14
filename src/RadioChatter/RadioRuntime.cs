@@ -13,8 +13,6 @@ namespace RadioChatter
         private static Config _config;
         private static ManualLogSource _log;
 
-        public static bool Ready => _poller != null;
-
         public static void Initialize(StatePoller poller, RadioAudioPlayer output, VoiceCommandController voice, Config config, ManualLogSource log)
         {
             _poller = poller;

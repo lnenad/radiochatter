@@ -1,0 +1,10 @@
+# Files that make up the deployable sidecar. Single source of truth consumed by
+# build.ps1, build.sh, and tools/package_github_release.py — add new sidecar files
+# here once instead of in every copy script. Lines starting with # are ignored.
+# .bat files are converted to CRLF when staged (cmd.exe can fail to find labels
+# in LF-only batch files after CALL/GOTO).
+server.py
+requirements.txt
+voices.json
+run_sidecar.bat
+run_sidecar.sh

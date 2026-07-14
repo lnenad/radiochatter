@@ -70,9 +70,19 @@ mkdir -p "$PLUGIN_DIR"
 cp "$OUT_DLL" "$PLUGIN_DIR/"
 
 mkdir -p "$SIDECAR_DIR"
-for name in server.py requirements.txt voices.json run_sidecar.bat run_sidecar.sh; do
+# File list comes from sidecar/MANIFEST (comments and blank lines ignored).
+grep -v '^[[:space:]]*\(#\|$\)' "$SIDECAR_SRC/MANIFEST" | while IFS= read -r name; do
     if [ -f "$SIDECAR_SRC/$name" ]; then
-        cp "$SIDECAR_SRC/$name" "$SIDECAR_DIR/"
+        case "$name" in
+            *.bat)
+                # cmd.exe can fail to find labels in LF-only batch files after CALL/GOTO.
+                awk '{ sub(/\r$/, ""); printf "%s\r\n", $0 }' \
+                    "$SIDECAR_SRC/$name" > "$SIDECAR_DIR/$name"
+                ;;
+            *)
+                cp "$SIDECAR_SRC/$name" "$SIDECAR_DIR/"
+                ;;
+        esac
     fi
 done
 

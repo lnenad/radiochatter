@@ -195,7 +195,7 @@ namespace RadioChatter.Speech
             clip.GetData(frames, 0);
             UnityEngine.Object.Destroy(clip);
 
-            string url = _config.SidecarUrl.Value.TrimEnd('/') + "/transcribe";
+            string url = SidecarHttp.BuildUrl(_config, "/transcribe");
             string prompt = BuildPrompt();
             _transcribing = true;
             Task.Run(() => TranscribeAndDispatch(url, frames, frequency, channels, prompt));
@@ -244,10 +244,11 @@ namespace RadioChatter.Speech
                    "Vector to objective. Request objective list. " +
                    "Vector to home plate. Return to base. Radio check. Say again. Please repeat. Repeat your last. " +
                    "Winchester. Radio quiet. Resume calls. " +
-                   "Checking in, CAP as fragged. Checking in as close air support. " +
+                   "Checking in, CAP as fragged. Checking in, close air patrol as fragged. " +
+                   "Checking in as close air support. " +
                    "Checking in, SEAD as fragged. Checking in, strike as fragged. " +
                    "Checking in, air interdiction as fragged. Mission bombing. " +
-                   "Checking in, maritime strike as fragged. Mission anti surface warfare. " +
+                   "Checking in, maritime strike as fragged. Mission anti surface warfare. Mission ship hunter. " +
                    "Mission search and destroy. Mission general. " +
                    "Hammer four unable. Negative Anvil one. Unable to assist Ranger two. " +
                    _config.AwacsCallsign.Value + ", " + _config.PlayerCallsign.Value + ", airborne, checking in.";
@@ -266,27 +267,10 @@ namespace RadioChatter.Speech
 
         private static string PostTranscribe(string url, byte[] wav, string prompt)
         {
-            byte[] payload = Encoding.UTF8.GetBytes(
-                "{\"audio_b64\":\"" + Convert.ToBase64String(wav) + "\",\"prompt\":\"" + JsonEscape(prompt) + "\"}");
-
-            HttpWebRequest request = (HttpWebRequest)WebRequest.Create(url);
-            request.Method = "POST";
-            request.ContentType = "application/json";
-            request.Accept = "application/json";
-            request.Timeout = TranscribeTimeoutMs;
-            request.ReadWriteTimeout = TranscribeTimeoutMs;
-            request.ContentLength = payload.Length;
-
-            using (Stream stream = request.GetRequestStream())
-                stream.Write(payload, 0, payload.Length);
-
-            string body;
-            using (HttpWebResponse response = (HttpWebResponse)request.GetResponse())
-            using (Stream responseStream = response.GetResponseStream())
-            using (StreamReader reader = new StreamReader(responseStream, Encoding.UTF8))
-                body = reader.ReadToEnd();
-
-            return ExtractJsonString(body, "text");
+            string requestBody =
+                "{\"audio_b64\":\"" + Convert.ToBase64String(wav) + "\",\"prompt\":\"" + MiniJson.Escape(prompt) + "\"}";
+            byte[] response = SidecarHttp.PostJson(url, requestBody, "application/json", TranscribeTimeoutMs);
+            return MiniJson.ExtractString(Encoding.UTF8.GetString(response), "text");
         }
 
         private static byte[] EncodeWavMono16(float[] frames, int frequency, int channels)
@@ -324,81 +308,6 @@ namespace RadioChatter.Speech
                 writer.Flush();
                 return memory.ToArray();
             }
-        }
-
-        private static string JsonEscape(string value)
-        {
-            StringBuilder builder = new StringBuilder(value.Length + 8);
-            for (int i = 0; i < value.Length; i++)
-            {
-                char c = value[i];
-                switch (c)
-                {
-                    case '\\': builder.Append("\\\\"); break;
-                    case '"': builder.Append("\\\""); break;
-                    case '\n': builder.Append("\\n"); break;
-                    case '\r': builder.Append("\\r"); break;
-                    case '\t': builder.Append("\\t"); break;
-                    default:
-                        if (c < 32)
-                            builder.Append("\\u").Append(((int)c).ToString("x4"));
-                        else
-                            builder.Append(c);
-                        break;
-                }
-            }
-            return builder.ToString();
-        }
-
-        private static string ExtractJsonString(string json, string field)
-        {
-            string marker = "\"" + field + "\"";
-            int index = json.IndexOf(marker, StringComparison.Ordinal);
-            if (index < 0)
-                return null;
-
-            index = json.IndexOf(':', index + marker.Length);
-            if (index < 0)
-                return null;
-
-            index = json.IndexOf('"', index);
-            if (index < 0)
-                return null;
-
-            StringBuilder builder = new StringBuilder(64);
-            for (int i = index + 1; i < json.Length; i++)
-            {
-                char c = json[i];
-                if (c == '"')
-                    return builder.ToString();
-
-                if (c == '\\' && i + 1 < json.Length)
-                {
-                    char escape = json[++i];
-                    switch (escape)
-                    {
-                        case 'n': builder.Append('\n'); break;
-                        case 'r': builder.Append('\r'); break;
-                        case 't': builder.Append('\t'); break;
-                        case 'b': builder.Append('\b'); break;
-                        case 'f': builder.Append('\f'); break;
-                        case 'u':
-                            if (i + 4 < json.Length)
-                            {
-                                builder.Append((char)Convert.ToInt32(json.Substring(i + 1, 4), 16));
-                                i += 4;
-                            }
-                            break;
-                        default: builder.Append(escape); break;
-                    }
-                }
-                else
-                {
-                    builder.Append(c);
-                }
-            }
-
-            return null;
         }
 
         private void WarnOnce(string message)

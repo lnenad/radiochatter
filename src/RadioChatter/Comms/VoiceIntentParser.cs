@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Text;
+using static RadioChatter.Comms.SpeechText;
 
 namespace RadioChatter.Comms
 {
@@ -28,7 +29,9 @@ namespace RadioChatter.Comms
         public static bool SuppressAutomaticAirContacts(FlightMissionRole role)
         {
             return role == FlightMissionRole.Cas ||
-                   role == FlightMissionRole.Sead;
+                   role == FlightMissionRole.Sead ||
+                   role == FlightMissionRole.Strike ||
+                   role == FlightMissionRole.MaritimeStrike;
         }
     }
 
@@ -101,15 +104,11 @@ namespace RadioChatter.Comms
             "call", "calls", "callout", "callouts", "traffic",
             "winchester", "weapons", "ordnance", "ordinance", "dry",
             "mission", "role", "tasked", "tasking", "as", "fragged", "cap", "cas", "sead", "seed",
+            "close", "combat", "patrol",
             "strike", "interdiction", "bomb", "bombing", "bomber", "ground",
-            "maritime", "naval", "anti", "ship", "shipping", "surface", "warfare", "countersea", "war",
+            "maritime", "naval", "anti", "ship", "shipping", "hunter", "hunting", "surface", "warfare", "countersea", "war",
             "search", "destroy", "general", "multirole", "multi",
             "say", "need", "want", "give", "what", "on", "for", "with", "at", "to"
-        };
-
-        private static readonly string[] NumberWords =
-        {
-            "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "niner"
         };
 
         private static readonly string[] EmptyTokens = new string[0];
@@ -256,27 +255,6 @@ namespace RadioChatter.Comms
                 return configured;
 
             return Prettify(spoken);
-        }
-
-        private static string FoldForCompare(string normalized)
-        {
-            string[] tokens = normalized.Split(' ');
-            StringBuilder builder = new StringBuilder(normalized.Length);
-            for (int i = 0; i < tokens.Length; i++)
-                builder.Append(FoldNumberToken(tokens[i]));
-
-            return builder.ToString();
-        }
-
-        private static string FoldNumberToken(string token)
-        {
-            for (int n = 0; n < NumberWords.Length; n++)
-            {
-                if (token == NumberWords[n])
-                    return (n == 10 ? 9 : n).ToString();
-            }
-
-            return token;
         }
 
         /// <summary>Words carrying no meaning when matching a spoken objective reference
@@ -555,7 +533,7 @@ namespace RadioChatter.Comms
                 return true;
             }
 
-            if (HasAny(text, "cap", "c a p", "combat air patrol"))
+            if (HasAny(text, "cap", "c a p", "combat air patrol", "close air patrol"))
             {
                 role = FlightMissionRole.Cap;
                 return true;
@@ -564,7 +542,8 @@ namespace RadioChatter.Comms
             if (HasAny(text,
                 "maritime strike", "naval strike", "ship strike", "shipping strike",
                 "anti ship", "anti shipping", "anti surface warfare", "asuw", "a s u w",
-                "war at sea", "countersea", "counter sea", "ship attack", "attack ships"))
+                "war at sea", "countersea", "counter sea", "ship attack", "attack ships",
+                "ship hunter", "ship hunting"))
             {
                 role = FlightMissionRole.MaritimeStrike;
                 return true;
@@ -620,58 +599,5 @@ namespace RadioChatter.Comms
             return false;
         }
 
-        /// <summary>Word-boundary Contains over the normalized (space-separated) text, so
-        /// "land" does not match "island". Both text and needle are already normalized.</summary>
-        private static int IndexOfWord(string text, string needle)
-        {
-            if (needle.Length == 0)
-                return -1;
-
-            int start = 0;
-            while (true)
-            {
-                int index = text.IndexOf(needle, start, System.StringComparison.Ordinal);
-                if (index < 0)
-                    return -1;
-
-                bool startOk = index == 0 || text[index - 1] == ' ';
-                int end = index + needle.Length;
-                bool endOk = end == text.Length || text[end] == ' ';
-                if (startOk && endOk)
-                    return index;
-
-                start = index + 1;
-            }
-        }
-
-        /// <summary>Lowercase, strip everything but letters/digits to single spaces. This also
-        /// folds transcription variants like "take-off" and "take off." onto "take off".</summary>
-        private static string Normalize(string value)
-        {
-            if (string.IsNullOrEmpty(value))
-                return string.Empty;
-
-            StringBuilder builder = new StringBuilder(value.Length);
-            bool lastWasSpace = true;
-            for (int i = 0; i < value.Length; i++)
-            {
-                char c = value[i];
-                if (char.IsLetterOrDigit(c))
-                {
-                    builder.Append(char.ToLowerInvariant(c));
-                    lastWasSpace = false;
-                }
-                else if (!lastWasSpace)
-                {
-                    builder.Append(' ');
-                    lastWasSpace = true;
-                }
-            }
-
-            while (builder.Length > 0 && builder[builder.Length - 1] == ' ')
-                builder.Length--;
-
-            return builder.ToString();
-        }
     }
 }

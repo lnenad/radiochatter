@@ -30,18 +30,27 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Run logic tests
+        run: dotnet run --project tests/RadioChatter.LogicTests -c Release
+
       - name: Install Inno Setup
         shell: powershell
         run: choco install innosetup --no-progress -y
 
+      # Only the plugin DLL is prebuilt (it links against game assemblies that exist
+      # only on the dev machine). The sidecar is staged fresh from sidecar/ by
+      # package_github_release.py, so a stale release/payload copy cannot ship.
       - name: Validate prebuilt payload
         shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
           if (!(Test-Path release/payload/RadioChatter.dll)) { throw "release/payload/RadioChatter.dll is missing. Create tags with tools/new_release_tag.ps1." }
-          if (!(Test-Path release/payload/sidecar/server.py)) { throw "release/payload/sidecar/server.py is missing." }
-          if (!(Test-Path release/payload/sidecar/run_sidecar.bat)) { throw "release/payload/sidecar/run_sidecar.bat is missing." }
-          if (!(Test-Path release/payload/sidecar/run_sidecar.sh)) { throw "release/payload/sidecar/run_sidecar.sh is missing." }
+          if (!(Test-Path sidecar/server.py)) { throw "sidecar/server.py is missing." }
 
       - name: Restore bundled model cache
         id: model-cache

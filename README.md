@@ -175,7 +175,7 @@ Other valid role exchanges use the same explicit readback:
 
 [PLAYER]  Overwatch, Broadsword 1-1, strike as fragged.
 [AWACS]   Broadsword 1-1, Overwatch, mission strike acknowledged, as fragged.
-[SYSTEM]  Strike: ground hails muted; automatic new-air-contact calls retained.
+[SYSTEM]  Strike: ground hails and automatic new-air-contact calls muted.
 
 [PLAYER]  Overwatch, Broadsword 1-1, bombing mission as fragged.
 [AWACS]   Broadsword 1-1, Overwatch, mission strike acknowledged, as fragged.
@@ -183,7 +183,7 @@ Other valid role exchanges use the same explicit readback:
 
 [PLAYER]  Overwatch, Broadsword 1-1, maritime strike as fragged.
 [AWACS]   Broadsword 1-1, Overwatch, mission maritime strike, anti-surface warfare acknowledged.
-[SYSTEM]  Maritime strike / ASuW: ground hails muted; defensive air-contact calls retained.
+[SYSTEM]  Maritime strike / ship hunter / ASuW: ground hails and automatic new-air-contact calls muted.
 
 [PLAYER]  Mission general.
 [AWACS]   Broadsword 1-1, Overwatch, general mission acknowledged. All traffic enabled.
@@ -687,10 +687,10 @@ screen. Nothing is skipped or lost because of a pause.
   - `SEAD`: both generic streams muted; check-in reports the nearest currently emitting hostile
     surface radar with an arcade-readable bearing and range.
   - `Strike` / `air interdiction` / `bombing mission`: ground-support hails muted; automatic
-    new-air-contact calls retained. Air interdiction is the doctrinal term for attacks on enemy
+    new-air-contact calls muted. Air interdiction is the doctrinal term for attacks on enemy
     military potential away from the close coordination required for CAS ([USAF AFDP 3-03](https://www.doctrine.af.mil/Portals/61/documents/AFDP_3-03/3-03-D03-AIFundamentals.pdf)).
-  - `Maritime strike` / `anti-ship` / `ASuW`: ship-attack tasking with strike-like filtering;
-    ground-support hails are muted and defensive air-contact calls retained. `ASuW` means
+  - `Maritime strike` / `ship hunter` / `anti-ship` / `ASuW`: ship-attack tasking with strike-like
+    filtering; ground-support hails and automatic new-air-contact calls are muted. `ASuW` means
     anti-surface warfare; `war-at-sea strike` is also accepted ([US Navy/NAVAIR](https://www.navair.navy.mil/lrasm)).
   - `Search and destroy`: strike-like filtering; ground-support hails muted and automatic
     new-air-contact calls retained.

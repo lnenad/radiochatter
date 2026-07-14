@@ -18,7 +18,10 @@ Copy-Item $outDll $pluginDir -Force
 $sidecarSrc = Join-Path $PSScriptRoot "sidecar"
 $sidecarDir = Join-Path $pluginDir "sidecar"
 New-Item -ItemType Directory -Force $sidecarDir | Out-Null
-foreach ($name in @("server.py", "requirements.txt", "voices.json", "run_sidecar.bat", "run_sidecar.sh")) {
+$manifest = Get-Content (Join-Path $sidecarSrc "MANIFEST") |
+    ForEach-Object { $_.Trim() } |
+    Where-Object { $_ -and -not $_.StartsWith("#") }
+foreach ($name in $manifest) {
     $source = Join-Path $sidecarSrc $name
     if (Test-Path -LiteralPath $source) {
         $destination = Join-Path $sidecarDir $name

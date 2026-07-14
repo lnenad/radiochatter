@@ -1,5 +1,5 @@
 using System;
-using System.Text;
+using static RadioChatter.Comms.SpeechText;
 
 namespace RadioChatter.Comms
 {
@@ -193,38 +193,6 @@ namespace RadioChatter.Comms
             return foldedNeedle.Length > 0 && FoldForCompare(normalizedHaystack).Contains(foldedNeedle);
         }
 
-        private static string FoldForCompare(string normalized)
-        {
-            string[] tokens = normalized.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
-            StringBuilder builder = new StringBuilder(normalized.Length);
-            for (int i = 0; i < tokens.Length; i++)
-                builder.Append(FoldNumberToken(tokens[i]));
-
-            return builder.ToString();
-        }
-
-        private static string FoldNumberToken(string token)
-        {
-            switch (token)
-            {
-                case "zero":
-                case "oh": return "0";
-                case "one": return "1";
-                case "two": return "2";
-                case "three":
-                case "tree": return "3";
-                case "four": return "4";
-                case "five":
-                case "fife": return "5";
-                case "six": return "6";
-                case "seven": return "7";
-                case "eight": return "8";
-                case "nine":
-                case "niner": return "9";
-                default: return token;
-            }
-        }
-
         private static bool HasAnyWord(string normalized, params string[] words)
         {
             for (int i = 0; i < words.Length; i++)
@@ -236,52 +204,5 @@ namespace RadioChatter.Comms
             return false;
         }
 
-        private static int IndexOfWord(string text, string word, int start = 0)
-        {
-            while (start < text.Length)
-            {
-                int index = text.IndexOf(word, start, StringComparison.Ordinal);
-                if (index < 0)
-                    return -1;
-
-                bool startOk = index == 0 || text[index - 1] == ' ';
-                int end = index + word.Length;
-                bool endOk = end == text.Length || text[end] == ' ';
-                if (startOk && endOk)
-                    return index;
-
-                start = index + 1;
-            }
-
-            return -1;
-        }
-
-        private static string Normalize(string value)
-        {
-            if (string.IsNullOrEmpty(value))
-                return string.Empty;
-
-            StringBuilder builder = new StringBuilder(value.Length);
-            bool lastWasSpace = true;
-            for (int i = 0; i < value.Length; i++)
-            {
-                char c = value[i];
-                if (char.IsLetterOrDigit(c))
-                {
-                    builder.Append(char.ToLowerInvariant(c));
-                    lastWasSpace = false;
-                }
-                else if (!lastWasSpace)
-                {
-                    builder.Append(' ');
-                    lastWasSpace = true;
-                }
-            }
-
-            while (builder.Length > 0 && builder[builder.Length - 1] == ' ')
-                builder.Length--;
-
-            return builder.ToString();
-        }
     }
 }

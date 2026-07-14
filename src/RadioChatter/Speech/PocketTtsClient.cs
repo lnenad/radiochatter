@@ -63,32 +63,17 @@ namespace RadioChatter.Speech
 
         private byte[] PostSpeak(string voice, string text)
         {
-            string url = _config.SidecarUrl.Value.TrimEnd('/') + "/speak";
-            byte[] payload = Encoding.UTF8.GetBytes(
-                "{\"text\":\"" + JsonEscape(text) + "\",\"voice\":\"" + JsonEscape(voice) + "\"}");
+            string url = SidecarHttp.BuildUrl(_config, "/speak");
+            string body = "{\"text\":\"" + MiniJson.Escape(text) + "\",\"voice\":\"" + MiniJson.Escape(voice) + "\"}";
 
-            HttpWebRequest request = (HttpWebRequest)WebRequest.Create(url);
-            request.Method = "POST";
-            request.ContentType = "application/json";
-            request.Accept = "audio/wav";
             // The sidecar generates one line at a time (~1.5s each) and queues
             // overlapping requests FIFO, so the timeout must cover a full burst of
-            // MaxPendingSpeech lines, not just one generation. Requests that would
-            // outlive the shortest clip lifetime (10s) are not worth waiting for.
-            request.Timeout = 6000;
-            request.ReadWriteTimeout = 6000;
-            request.ContentLength = payload.Length;
-
-            using (Stream stream = request.GetRequestStream())
-                stream.Write(payload, 0, payload.Length);
-
-            using (HttpWebResponse response = (HttpWebResponse)request.GetResponse())
-            using (Stream responseStream = response.GetResponseStream())
-            using (MemoryStream memory = new MemoryStream())
-            {
-                responseStream.CopyTo(memory);
-                return memory.ToArray();
-            }
+            // MaxPendingSpeech (8) lines — ~12s — not just one generation. Timing out
+            // earlier abandons the HTTP call while the sidecar keeps generating, and the
+            // caller's retry then amplifies load on an already-busy sidecar. 12s stays
+            // under the shortest queued-clip lifetime (15s), so a reply that arrives at
+            // the deadline is still playable.
+            return SidecarHttp.PostJson(url, body, "audio/wav", 12000);
         }
 
         private void AddCache(string key, ClipData clip)
@@ -116,30 +101,6 @@ namespace RadioChatter.Speech
         private static string CacheKey(string voice, string text)
         {
             return voice + "\n" + text;
-        }
-
-        private static string JsonEscape(string value)
-        {
-            StringBuilder builder = new StringBuilder(value.Length + 8);
-            for (int i = 0; i < value.Length; i++)
-            {
-                char c = value[i];
-                switch (c)
-                {
-                    case '\\': builder.Append("\\\\"); break;
-                    case '"': builder.Append("\\\""); break;
-                    case '\n': builder.Append("\\n"); break;
-                    case '\r': builder.Append("\\r"); break;
-                    case '\t': builder.Append("\\t"); break;
-                    default:
-                        if (c < 32)
-                            builder.Append("\\u").Append(((int)c).ToString("x4"));
-                        else
-                            builder.Append(c);
-                        break;
-                }
-            }
-            return builder.ToString();
         }
     }
 

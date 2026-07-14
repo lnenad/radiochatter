@@ -200,7 +200,7 @@ namespace RadioChatter.Speech
         {
             try
             {
-                string url = _config.SidecarUrl.Value.TrimEnd('/') + "/health";
+                string url = SidecarHttp.BuildUrl(_config, "/health");
                 HttpWebRequest request = (HttpWebRequest)WebRequest.Create(url);
                 request.Method = "GET";
                 request.Accept = "application/json";
@@ -238,7 +238,7 @@ namespace RadioChatter.Speech
 
                 if ((int)response.StatusCode == 503 && body.Contains("\"error\""))
                 {
-                    error = ExtractJsonField(body, "error") ?? "model failed to load";
+                    error = MiniJson.ExtractString(body, "error") ?? "model failed to load";
                     return HealthProbe.Failed;
                 }
 
@@ -273,22 +273,6 @@ namespace RadioChatter.Speech
             {
                 return string.Empty;
             }
-        }
-
-        private static string ExtractJsonField(string body, string field)
-        {
-            // Tiny extractor for the sidecar's flat JSON; avoids a JSON dependency in net472.
-            string marker = "\"" + field + "\":";
-            int start = body.IndexOf(marker, StringComparison.Ordinal);
-            if (start < 0)
-                return null;
-
-            start = body.IndexOf('"', start + marker.Length);
-            if (start < 0)
-                return null;
-
-            int end = body.IndexOf('"', start + 1);
-            return end > start ? body.Substring(start + 1, end - start - 1) : null;
         }
 
         private bool TryLaunchSidecar(out string error)

@@ -5,6 +5,9 @@ internal static class Program
 {
     private static int Main()
     {
+        TestInboundTracker();
+        TestWeaponBrevityClassifier();
+
         Assert(VoiceIntentParser.ContainsSpokenCallsign("Anvil one, copy", "Anvil 1"), "digit words match digits");
         Assert(VoiceIntentParser.ContainsSpokenCallsign(
             "Anvil, this is Broadsword one one, inbound, hold on", "Anvil"), "natural reply contains ground callsign stem");
@@ -191,6 +194,22 @@ internal static class Program
                capCheckIn.MissionRole == FlightMissionRole.Cap,
             "CAP mission check-in selects the CAP role");
 
+        VoiceIntent closeAirPatrolCheckIn = VoiceIntentParser.Parse(
+            "Overwatch, Broadsword one one, close air patrol as mission", "Overwatch", "Broadsword 1-1");
+        Assert(closeAirPatrolCheckIn.Kind == VoiceIntentKind.SetMissionRole &&
+               closeAirPatrolCheckIn.MissionRole == FlightMissionRole.Cap,
+            "close-air-patrol wording selects the CAP role");
+        Assert(closeAirPatrolCheckIn.Callsign == "Broadsword 1-1" &&
+               closeAirPatrolCheckIn.StationAddressed && closeAirPatrolCheckIn.CallsignSpoken,
+            "expanded CAP wording does not leak into the player callsign");
+
+        VoiceIntent terseCloseAirPatrol = VoiceIntentParser.Parse(
+            "mission close air patrol", "Overwatch", "Broadsword 1-1");
+        Assert(terseCloseAirPatrol.Kind == VoiceIntentKind.SetMissionRole &&
+               terseCloseAirPatrol.MissionRole == FlightMissionRole.Cap &&
+               VoiceIntentParser.ContainsMissionCommandWord("mission close air patrol"),
+            "terse mission close-air-patrol works as an explicit cockpit command");
+
         VoiceIntent casCheckIn = VoiceIntentParser.Parse(
             "Overwatch, Broadsword one one, mission C A S", "Overwatch", "Broadsword 1-1");
         Assert(casCheckIn.Kind == VoiceIntentKind.SetMissionRole &&
@@ -228,6 +247,12 @@ internal static class Program
                antiSurfaceMission.MissionRole == FlightMissionRole.MaritimeStrike,
             "anti-surface warfare is accepted as a maritime-strike alias");
 
+        VoiceIntent shipHunterMission = VoiceIntentParser.Parse(
+            "mission ship hunter", "Overwatch", "Broadsword 1-1");
+        Assert(shipHunterMission.Kind == VoiceIntentKind.SetMissionRole &&
+               shipHunterMission.MissionRole == FlightMissionRole.MaritimeStrike,
+            "ship hunter is accepted as a maritime-strike alias");
+
         VoiceIntent searchAndDestroyMission = VoiceIntentParser.Parse(
             "mission search and destroy", "Overwatch", "Broadsword 1-1");
         Assert(searchAndDestroyMission.Kind == VoiceIntentKind.SetMissionRole &&
@@ -256,11 +281,11 @@ internal static class Program
                FlightMissionRolePolicy.SuppressAutomaticAirContacts(FlightMissionRole.Sead),
             "SEAD suppresses both generic chatter streams");
         Assert(FlightMissionRolePolicy.SuppressGroundSupportHails(FlightMissionRole.Strike) &&
-               !FlightMissionRolePolicy.SuppressAutomaticAirContacts(FlightMissionRole.Strike),
-            "strike suppresses ground hails and retains air contacts");
+               FlightMissionRolePolicy.SuppressAutomaticAirContacts(FlightMissionRole.Strike),
+            "strike suppresses ground hails and automatic air contacts");
         Assert(FlightMissionRolePolicy.SuppressGroundSupportHails(FlightMissionRole.MaritimeStrike) &&
-               !FlightMissionRolePolicy.SuppressAutomaticAirContacts(FlightMissionRole.MaritimeStrike),
-            "maritime strike suppresses ground hails and retains defensive air contacts");
+               FlightMissionRolePolicy.SuppressAutomaticAirContacts(FlightMissionRole.MaritimeStrike),
+            "ship-hunting missions suppress ground hails and automatic air contacts");
         Assert(FlightMissionRolePolicy.SuppressGroundSupportHails(FlightMissionRole.SearchAndDestroy) &&
                !FlightMissionRolePolicy.SuppressAutomaticAirContacts(FlightMissionRole.SearchAndDestroy),
             "search and destroy uses strike-like chatter filtering");
@@ -291,8 +316,202 @@ internal static class Program
         Assert(secondaryVector.Kind == VoiceIntentKind.RequestVectorGroundSupport,
             "secondary has an explicit ground-vector intent");
 
+        // The two tower-clearance grammars must agree: every clearance that
+        // PlayerResponsePolicy builds a readback for must be one TowerReadbackMatcher
+        // both recognizes and accepts back, otherwise readback prompts and the
+        // automatic fallback response drift apart.
+        string[] clearanceLines =
+        {
+            "Broadsword 1-1, cleared for takeoff, runway two seven",
+            "Broadsword 1-1, deck control, cleared for launch",
+            "Broadsword 1-1, cleared to land, runway two seven",
+            "Broadsword 1-1, carrier, cleared to recover",
+            "Broadsword 1-1, carrier, cleared for recovery",
+            "Broadsword 1-1, airborne, switch Overwatch",
+            "Broadsword 1-1, contact Overwatch on button two"
+        };
+        foreach (string clearance in clearanceLines)
+        {
+            string readback = PlayerResponsePolicy.TowerReadbackFor(clearance);
+            Assert(!string.IsNullOrEmpty(readback),
+                $"response policy produces a readback for: {clearance}");
+            Assert(TowerReadbackMatcher.TryCreate(clearance, out TowerReadbackExpectation clearanceExpectation),
+                $"readback matcher recognizes the same clearance: {clearance}");
+            Assert(TowerReadbackMatcher.IsMatch(readback, clearanceExpectation),
+                $"the policy's own readback satisfies the matcher: \"{readback}\" for \"{clearance}\"");
+        }
+        Assert(PlayerResponsePolicy.TowerReadbackFor("Broadsword 1-1, winds calm, altimeter two niner niner two") == null,
+            "informational tower chatter produces no readback");
+
+        var responsePolicy = new PlayerResponsePolicy();
+        PlayerResponse awacsAck = responsePolicy.ResponseFor(
+            RadioRole.Awacs, RadioEventType.NewContact, "Broadsword 1-1, Overwatch, new contact", false);
+        Assert(awacsAck.Role == RadioRole.PlayerAwacs && !string.IsNullOrEmpty(awacsAck.Text),
+            "AWACS traffic receives a generic player acknowledgement");
+        Assert(responsePolicy.ResponseFor(
+                   RadioRole.Awacs, RadioEventType.MissileThreat, "defend, defend, missile inbound", false).Text == null,
+            "missile warnings are never acknowledged automatically");
+        Assert(responsePolicy.ResponseFor(
+                   RadioRole.Game, RadioEventType.GroundSupportVector, "Anvil, what is your ETA?", false).Text == null,
+            "questions are never answered with a generic acknowledgement");
+        PlayerResponse spokenModeReadback = responsePolicy.ResponseFor(
+            RadioRole.Tower, RadioEventType.TowerTakeoff, "Broadsword 1-1, cleared for takeoff, runway two seven", true);
+        Assert(spokenModeReadback.Text == null,
+            "spoken-readback mode suppresses the automatic tower readback so the player must answer");
+
+        // Transmission queue: priority/age selection, expiry, staleness, hold routing,
+        // dedup window, and per-type cooldown.
+        var queue = new TransmissionQueue(60f);
+        Assert(!queue.IsOnCooldown(RadioEventType.PictureUpdate, 100f, 45f) &&
+               !queue.IsDuplicate("picture clean", 100f, 60f),
+            "a fresh queue has no cooldown or duplicate history");
+        queue.MarkQueued("picture clean", RadioEventType.PictureUpdate, 100f);
+        Assert(queue.IsOnCooldown(RadioEventType.PictureUpdate, 130f, 45f),
+            "a queued type stays on cooldown inside its window");
+        Assert(!queue.IsOnCooldown(RadioEventType.PictureUpdate, 146f, 45f),
+            "the type cooldown releases after its window");
+        Assert(queue.IsDuplicate("picture clean", 159f, 60f) && !queue.IsDuplicate("picture clean", 161f, 60f),
+            "identical text is deduplicated only inside the duplicate window");
+        queue.Add(new PendingTransmission
+        {
+            Role = RadioRole.Awacs, Type = RadioEventType.PictureUpdate, Text = "low", Priority = 10,
+            CreatedAt = 100f, AvailableAt = 100f, ExpiresAt = 500f,
+            DisplaySeconds = 4f, BypassStartupHold = false
+        });
+        queue.Add(new PendingTransmission
+        {
+            Type = RadioEventType.MissileThreat, Text = "urgent", Priority = 90,
+            CreatedAt = 101f, AvailableAt = 100f, ExpiresAt = 500f
+        });
+        queue.Add(new PendingTransmission
+        {
+            Type = RadioEventType.NewContact, Text = "expired", Priority = 95,
+            CreatedAt = 90f, AvailableAt = 90f, ExpiresAt = 99f
+        });
+        Assert(queue.TrySelectNext(100f, null, null, null, out PendingTransmission picked) &&
+               picked.Text == "urgent" && queue.Count == 1,
+            "selection prefers the highest priority and drops expired items");
+        queue.Add(new PendingTransmission
+        {
+            Type = RadioEventType.NewContact, Text = "held", Priority = 95,
+            CreatedAt = 100f, AvailableAt = 100f, ExpiresAt = 500f
+        });
+        int heldCount = 0;
+        Assert(queue.TrySelectNext(100f,
+                   item => false,
+                   item => item.Type == RadioEventType.NewContact,
+                   item => heldCount++,
+                   out picked) &&
+               picked.Text == "low" && heldCount == 1 && queue.Count == 0,
+            "held items are routed to the hold callback and removed from the queue");
+        queue.Add(new PendingTransmission
+        {
+            Type = RadioEventType.NewContact, Text = "stale", Priority = 95,
+            CreatedAt = 100f, AvailableAt = 100f, ExpiresAt = 500f, SubjectId = 7
+        });
+        Assert(!queue.TrySelectNext(100f, item => item.SubjectId == 7, null, null, out picked) &&
+               queue.Count == 0,
+            "stale items are dropped during selection");
+        queue.Add(new PendingTransmission
+        {
+            Type = RadioEventType.PictureUpdate, Text = "later", Priority = 10,
+            CreatedAt = 100f, AvailableAt = 200f, ExpiresAt = 500f
+        });
+        Assert(!queue.TrySelectNext(150f, null, null, null, out picked) && queue.Count == 1,
+            "not-yet-available items stay queued without transmitting");
+
         Console.WriteLine("RadioChatter logic tests passed.");
         return 0;
+    }
+
+    private static void TestInboundTracker()
+    {
+        var tracker = new InboundTracker();
+        Assert(tracker.UpdateClosing(1000f, 10f),
+            "the first inbound-distance sample establishes a closing baseline");
+        Assert(!tracker.UpdateClosing(995f, 10f),
+            "distance changes below the closing threshold are ignored");
+        Assert(tracker.UpdateClosing(980f, 10f),
+            "distance changes beyond the threshold count as closing");
+
+        tracker.Track(true, 0f, 6f);
+        tracker.Track(true, 10f, 6f);
+        tracker.Track(false, 15f, 6f);
+        Assert(tracker.InboundFor(18f, 18f),
+            "brief inbound dropouts inside the grace window preserve the timer");
+        tracker.Track(false, 17f, 6f);
+        Assert(!tracker.InboundFor(18f, 18f),
+            "an inbound dropout beyond the grace window resets the timer");
+
+        tracker.UpdateClosing(950f, 10f);
+        tracker.ResetInbound();
+        Assert(!tracker.UpdateClosing(945f, 10f),
+            "resetting only the timer preserves the distance baseline");
+        tracker.Reset();
+        Assert(tracker.UpdateClosing(945f, 10f),
+            "a full reset clears the distance baseline");
+    }
+
+    private static void TestWeaponBrevityClassifier()
+    {
+        Assert(WeaponBrevityClassifier.Classify(new WeaponBrevityProfile { IsGun = true }) == "guns guns guns",
+            "guns use the repeated guns brevity call");
+        Assert(WeaponBrevityClassifier.Classify(new WeaponBrevityProfile
+        {
+            IsBomb = true,
+            IsGlideBomb = true,
+            IsMissile = true,
+            Description = "GBU precision bomb"
+        }) == "pickle", "bomb flags take precedence over missile characteristics");
+        Assert(WeaponBrevityClassifier.Classify(new WeaponBrevityProfile
+        {
+            IsMissile = true,
+            WeaponName = "Scythe AAM",
+            AntiAirEffectiveness = 1f,
+            MinimumInfraredSignal = 2f,
+            MinimumRadarSignal = 1f
+        }) == "fox three", "the Scythe keeps its active-radar fox-three special case");
+        Assert(WeaponBrevityClassifier.Classify(new WeaponBrevityProfile
+        {
+            IsMissile = true,
+            ShortName = "ARAD",
+            AntiSurfaceEffectiveness = 1f,
+            AntiRadarEffectiveness = 1f
+        }) == "magnum", "the named anti-radiation missile uses magnum");
+        Assert(WeaponBrevityClassifier.Classify(new WeaponBrevityProfile
+        {
+            IsMissile = true,
+            WeaponName = "Generic AGM",
+            AntiSurfaceEffectiveness = 1f,
+            AntiRadarEffectiveness = 1f
+        }) == "rifle", "anti-radar effectiveness alone does not misclassify an AGM as magnum");
+        Assert(WeaponBrevityClassifier.Classify(new WeaponBrevityProfile
+        {
+            IsMissile = true,
+            WeaponName = "Sidewinder",
+            AntiAirEffectiveness = 1f,
+            MinimumInfraredSignal = 2f,
+            MinimumRadarSignal = 1f
+        }) == "fox two", "infrared air-to-air missiles use fox two");
+        Assert(WeaponBrevityClassifier.Classify(new WeaponBrevityProfile
+        {
+            IsMissile = true,
+            WeaponName = "AIM-7 Sparrow",
+            AntiAirEffectiveness = 1f
+        }) == "fox one", "semi-active radar missiles use fox one");
+        Assert(WeaponBrevityClassifier.Classify(new WeaponBrevityProfile
+        {
+            IsMissile = true,
+            WeaponName = "AMRAAM",
+            AntiAirEffectiveness = 1f
+        }) == "fox three", "other air-to-air missiles default to fox three");
+        Assert(WeaponBrevityClassifier.Classify(new WeaponBrevityProfile
+        {
+            IsMissile = true,
+            WeaponName = "Unknown missile"
+        }) == null, "an unclassified missile produces no misleading release call");
+        Assert(WeaponBrevityClassifier.Classify(default) == null,
+            "a profile with no weapon characteristics produces no call");
     }
 
     private static void Assert(bool condition, string message)

@@ -1,5 +1,5 @@
 using System;
-using System.Text;
+using RadioChatter.Comms;
 
 namespace RadioChatter.Speech
 {
@@ -22,7 +22,7 @@ namespace RadioChatter.Speech
 
         public static bool HasWords(string transcript)
         {
-            string normalized = Normalize(transcript);
+            string normalized = SpeechText.Normalize(transcript);
             if (normalized.Length == 0)
                 return false;
 
@@ -33,34 +33,6 @@ namespace RadioChatter.Speech
             }
 
             return true;
-        }
-
-        private static string Normalize(string value)
-        {
-            if (string.IsNullOrWhiteSpace(value))
-                return string.Empty;
-
-            StringBuilder builder = new StringBuilder(value.Length);
-            bool lastWasSpace = true;
-            for (int i = 0; i < value.Length; i++)
-            {
-                char c = value[i];
-                if (char.IsLetterOrDigit(c))
-                {
-                    builder.Append(char.ToLowerInvariant(c));
-                    lastWasSpace = false;
-                }
-                else if (!lastWasSpace)
-                {
-                    builder.Append(' ');
-                    lastWasSpace = true;
-                }
-            }
-
-            while (builder.Length > 0 && builder[builder.Length - 1] == ' ')
-                builder.Length--;
-
-            return builder.ToString();
         }
     }
 }

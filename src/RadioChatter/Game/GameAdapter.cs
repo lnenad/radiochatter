@@ -86,15 +86,6 @@ namespace RadioChatter.Game
             return id != 0 ? id : unchecked((uint)unit.GetInstanceID());
         }
 
-        internal static uint PersistentId(global::Missile missile)
-        {
-            if (missile == null)
-                return 0;
-
-            uint id = missile.persistentID.Id;
-            return id != 0 ? id : unchecked((uint)missile.GetInstanceID());
-        }
-
         internal static string DisplayName(global::Unit unit)
         {
             if (unit == null)
@@ -133,11 +124,6 @@ namespace RadioChatter.Game
         internal static float HeadingOf(Transform transform)
         {
             return transform != null ? NormalizeHeading(transform.eulerAngles.y) : 0f;
-        }
-
-        internal static float BearingFrom(global::Unit from, global::Unit to)
-        {
-            return GPos.Bearing(PositionOf(from), PositionOf(to));
         }
 
         internal static MissileThreat ThreatFromMissile(global::Aircraft aircraft, global::Missile missile)

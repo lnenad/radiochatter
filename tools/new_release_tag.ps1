@@ -18,7 +18,6 @@ $plainVersion = $tag.Substring(1)
 $root = Resolve-Path (Join-Path $PSScriptRoot "..")
 $project = Join-Path $root "src\RadioChatter\RadioChatter.csproj"
 $payload = Join-Path $root "release\payload"
-$sidecarSrc = Join-Path $root "sidecar"
 
 Push-Location $root
 try {
@@ -38,22 +37,11 @@ try {
         New-Item -ItemType Directory -Force -Path $payload | Out-Null
     }
 
+    # Only the DLL is committed as a prebuilt artifact (CI cannot build it: the
+    # project links against game assemblies that exist only on this machine).
+    # The sidecar is staged fresh from sidecar/ by package_github_release.py.
     $outDll = Join-Path $root "src\RadioChatter\bin\$Configuration\RadioChatter.dll"
     Copy-Item -LiteralPath $outDll -Destination (Join-Path $payload "RadioChatter.dll") -Force
-
-    $sidecarDest = Join-Path $payload "sidecar"
-    New-Item -ItemType Directory -Force -Path $sidecarDest | Out-Null
-    foreach ($name in @("server.py", "requirements.txt", "voices.json", "run_sidecar.bat", "run_sidecar.sh")) {
-        $source = Join-Path $sidecarSrc $name
-        $destination = Join-Path $sidecarDest $name
-        if ($name.EndsWith(".bat")) {
-            $text = [System.IO.File]::ReadAllText($source)
-            $text = $text -replace "`r?`n", "`r`n"
-            [System.IO.File]::WriteAllText($destination, $text, [System.Text.UTF8Encoding]::new($false))
-        } else {
-            Copy-Item -LiteralPath $source -Destination $destination -Force
-        }
-    }
 
     if ($NoCommit) {
         Write-Host "Updated release/payload but did not commit or tag because -NoCommit was passed."
