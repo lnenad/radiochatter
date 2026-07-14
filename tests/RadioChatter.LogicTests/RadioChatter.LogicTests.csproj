@@ -8,5 +8,6 @@
 
   <ItemGroup>
     <Compile Include="..\..\src\RadioChatter\Comms\VoiceIntentParser.cs" Link="VoiceIntentParser.cs" />
+    <Compile Include="..\..\src\RadioChatter\Comms\GroundSupportThreatTracker.cs" Link="GroundSupportThreatTracker.cs" />
   </ItemGroup>
 </Project>

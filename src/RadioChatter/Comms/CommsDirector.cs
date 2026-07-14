@@ -126,6 +126,7 @@ namespace RadioChatter.Comms
         private float _rtbLastInboundAt = float.NaN;
         private bool _routineAwacsQuiet;
         private AwacsTrafficMode _awacsTrafficMode;
+        private FlightMissionRole _flightMissionRole;
         private float _nextSnapshotLogTime;
         private float _suppressPictureUntil;
         private float _suppressRoutineAwacsUntil;
@@ -134,6 +135,7 @@ namespace RadioChatter.Comms
         private bool _battlefieldChatterTracking;
         private GroundSupportGroup _activeGroundSupportGroup;
         private int _nextGroundSupportCallsign;
+        private float _nextGroundSupportHailAllowedAt;
         private bool _sessionActive;
 
         public CommsDirector(Config config, IRadioOutput output, ManualLogSource log)
@@ -258,6 +260,8 @@ namespace RadioChatter.Comms
                         if (evt.SubjectId != 0 && _announcedDestroyedUnits.Add(evt.SubjectId))
                             _log.LogInfo($"Event: unit destroyed: {evt.SubjectName}");
 
+                        HandleGroundSupportAttackerDestroyed(evt.SubjectId);
+
                         if (evt.SubjectIsFriendly && evt.SubjectIsAircraft)
                             AddBattlefieldChatterCandidate(evt.SubjectId, evt.SubjectName, "battlefield_lost", null, now, 4);
                         break;
@@ -372,6 +376,7 @@ namespace RadioChatter.Comms
                 }
             }
 
+            ResolveDestroyedGroundSupportThreats(snapshot.Time);
             ReleaseStalePlayerWeaponCalls(snapshot.Time);
             PromptForMissingTowerReadbacks(snapshot.Time);
         }
@@ -422,6 +427,11 @@ namespace RadioChatter.Comms
             if (!GroundSupportEnabled() || evt.SubjectId == 0)
                 return;
 
+            // A fire/damage callback can race a destruction callback in the same frame. Never
+            // open or refresh a task for an attacker already known to be destroyed.
+            if (evt.AttackerId != 0 && IsKnownDestroyed(evt.AttackerId))
+                return;
+
             GroundSupportGroup group;
             if (!_groundSupportByUnit.TryGetValue(evt.SubjectId, out group) || group.Closed)
                 group = FindGroundSupportGroupNear(evt.Position);
@@ -439,6 +449,7 @@ namespace RadioChatter.Comms
                     LastSeenAliveAt = now
                 };
                 group.MemberIds.Add(evt.SubjectId);
+                group.Threats.Track(evt.AttackerId);
                 _groundSupportGroups.Add(group);
                 _groundSupportByUnit[evt.SubjectId] = group;
 
@@ -450,6 +461,18 @@ namespace RadioChatter.Comms
             group.MemberIds.Add(evt.SubjectId);
             _groundSupportByUnit[evt.SubjectId] = group;
             float previousAttackAt = group.LastAttackAt;
+            bool reopening = group.Dismissed &&
+                             (group.Resolved ||
+                              (now - group.DismissedAt >= _config.GroundSupportRepeatSeconds.Value &&
+                               now - previousAttackAt >= _config.GroundSupportRepeatSeconds.Value));
+            if (reopening)
+            {
+                group.Threats.Restart(evt.AttackerId);
+                group.Resolved = false;
+            }
+            else
+                group.Threats.Track(evt.AttackerId);
+
             group.LastAttackAt = now;
             group.LastSeenAliveAt = now;
             if (group.AnchorUnitId == evt.SubjectId || group.AnchorUnitId == 0)
@@ -457,9 +480,7 @@ namespace RadioChatter.Comms
 
             // A declined/switched-away request stays quiet while attacks continue. Only a
             // genuinely new engagement after a full quiet interval may reuse the callsign.
-            if (group.Dismissed &&
-                now - group.DismissedAt >= _config.GroundSupportRepeatSeconds.Value &&
-                now - previousAttackAt >= _config.GroundSupportRepeatSeconds.Value)
+            if (reopening)
             {
                 group.Dismissed = false;
                 group.Pending = true;
@@ -504,21 +525,55 @@ namespace RadioChatter.Comms
             if (group == null || group.Closed || group.Accepted || group.Dismissed)
                 return false;
 
+            if (now < _nextGroundSupportHailAllowedAt)
+            {
+                group.NextHailAt = Mathf.Max(group.NextHailAt, _nextGroundSupportHailAllowedAt);
+                return false;
+            }
+
+            if (GroundSupportHailGate.ShouldHold(
+                    _stableGrounded,
+                    snapshot.Player.Grounded,
+                    ShouldHoldStartupAwacs(now, false)))
+            {
+                group.NextHailAt = now + _config.GroundSupportRepeatSeconds.Value;
+                return false;
+            }
+
+            if (SuppressGroundSupportHails())
+            {
+                group.NextHailAt = now + _config.GroundSupportRepeatSeconds.Value;
+                return false;
+            }
+
             bool queued = Queue(RadioRole.Game, RadioEventType.GroundSupportHail, "ground_support_hail", Slots(
-                "ground_callsign", group.Callsign,
-                "bearing", NumberSpeech.Bearing(GPos.Bearing(snapshot.Player.Position, group.Position)),
-                "range", RadioText.FormatRange(GPos.Distance2D(snapshot.Player.Position, group.Position), snapshot.Units)),
+                "ground_callsign", group.Callsign),
                 now, GroundSupportHailPriority, 7f, 0f, false,
                 subjectId: group.Id,
                 duplicateWindowSecondsOverride: 0f);
 
             if (queued)
             {
+                StartGroundSupportHailCooldown(now);
                 group.LastHailAt = now;
                 group.NextHailAt = now + _config.GroundSupportRepeatSeconds.Value;
             }
 
             return queued;
+        }
+
+        private void StartGroundSupportHailCooldown(float now)
+        {
+            _nextGroundSupportHailAllowedAt = Mathf.Max(
+                _nextGroundSupportHailAllowedAt,
+                GroundSupportHailGate.NextAllowedAt(now));
+
+            for (int i = 0; i < _groundSupportGroups.Count; i++)
+            {
+                GroundSupportGroup group = _groundSupportGroups[i];
+                if (group.Pending && !group.Closed && !group.Dismissed)
+                    group.NextHailAt = Mathf.Max(group.NextHailAt, _nextGroundSupportHailAllowedAt);
+            }
         }
 
         private void UpdateGroundSupportRequests(Snapshot snapshot)
@@ -601,6 +656,77 @@ namespace RadioChatter.Comms
             _log.LogInfo($"Ground support task canceled: {group.Callsign} is no longer active.");
         }
 
+        private void HandleGroundSupportAttackerDestroyed(uint attackerId)
+        {
+            if (attackerId == 0 || _groundSupportGroups.Count == 0)
+                return;
+
+            for (int i = 0; i < _groundSupportGroups.Count; i++)
+            {
+                GroundSupportGroup group = _groundSupportGroups[i];
+                if (group.Closed || !group.Threats.MarkDestroyed(attackerId))
+                    continue;
+
+                // More attack events can follow the destruction event in this same update.
+                // Finalize only after the whole batch has had a chance to add another attacker.
+                group.ThreatResolutionPending = true;
+            }
+        }
+
+        private void ResolveDestroyedGroundSupportThreats(float now)
+        {
+            for (int i = 0; i < _groundSupportGroups.Count; i++)
+            {
+                GroundSupportGroup group = _groundSupportGroups[i];
+                if (!group.ThreatResolutionPending)
+                    continue;
+
+                group.ThreatResolutionPending = false;
+                if (!group.Closed && group.Threats.Count == 0)
+                    ResolveGroundSupportThreat(group, now);
+            }
+        }
+
+        private void ResolveGroundSupportThreat(GroundSupportGroup group, float now)
+        {
+            bool playerWasSupporting = group.Accepted && _activeGroundSupportGroup == group;
+
+            // Keep the mission-persistent group and callsign available for a genuinely new
+            // engagement, but clear the current request/secondary immediately.
+            group.Pending = false;
+            group.Accepted = false;
+            group.Dismissed = true;
+            group.DismissedAt = now;
+            group.Resolved = true;
+            RemoveQueuedGroundSupport(group.Id);
+            CancelGroundSupportHailAudioAndRescheduleOthers(group, now);
+            _output.StopTransmissions(RadioEventType.GroundSupportAcknowledged);
+
+            if (_activeGroundSupportGroup == group)
+            {
+                _activeGroundSupportGroup = null;
+                _queue.RemoveAll(item => item.Type == RadioEventType.GroundSupportVector);
+                _output.StopTransmissions(RadioEventType.GroundSupportVector);
+            }
+
+            if (playerWasSupporting)
+            {
+                Queue(RadioRole.Game, RadioEventType.GroundSupportCompleted,
+                    "ground_support_completed", Slots(
+                        "callsign", _config.PlayerCallsign.Value,
+                        "ground_callsign", group.Callsign),
+                    now, VoiceResponsePriority, 4f, 0f, false,
+                    subjectId: group.Id,
+                    duplicateWindowSecondsOverride: 0f,
+                    bypassStartupHold: true);
+                _log.LogInfo($"Ground support task completed: {group.Callsign}; last tracked attacker destroyed.");
+            }
+            else
+            {
+                _log.LogInfo($"Ground support request resolved before acceptance: {group.Callsign}; last tracked attacker destroyed.");
+            }
+        }
+
         private bool QueueGroundSupportVector(
             Snapshot snapshot,
             GroundSupportGroup group,
@@ -623,15 +749,28 @@ namespace RadioChatter.Comms
                 bypassStartupHold: true);
         }
 
-        private bool QueueGroundSupportAcknowledgement(GroundSupportGroup group, string playerCallsign, float now, bool followup)
+        private bool QueueGroundSupportAcknowledgement(
+            Snapshot snapshot,
+            GroundSupportGroup group,
+            string playerCallsign,
+            float now,
+            bool followup)
         {
             if (group == null || group.Closed)
                 return false;
 
+            Dictionary<string, string> slots = Slots(
+                "callsign", playerCallsign,
+                "ground_callsign", group.Callsign);
+            if (!followup)
+            {
+                slots["bearing"] = NumberSpeech.Bearing(GPos.Bearing(snapshot.Player.Position, group.Position));
+                slots["range"] = RadioText.FormatRange(
+                    GPos.Distance2D(snapshot.Player.Position, group.Position), snapshot.Units);
+            }
+
             return Queue(RadioRole.Game, RadioEventType.GroundSupportAcknowledged,
-                followup ? "ground_support_followup_ack" : "ground_support_acknowledged", Slots(
-                    "callsign", playerCallsign,
-                    "ground_callsign", group.Callsign),
+                followup ? "ground_support_followup_ack" : "ground_support_acknowledged", slots,
                 now, VoiceResponsePriority, 4f, 0f, false,
                 subjectId: group.Id,
                 duplicateWindowSecondsOverride: 0f,
@@ -645,7 +784,8 @@ namespace RadioChatter.Comms
                 (item.Type == RadioEventType.GroundSupportHail ||
                  item.Type == RadioEventType.GroundSupportAcknowledged ||
                  item.Type == RadioEventType.GroundSupportVector ||
-                 item.Type == RadioEventType.GroundSupportDeclined));
+                 item.Type == RadioEventType.GroundSupportDeclined ||
+                 item.Type == RadioEventType.GroundSupportCompleted));
         }
 
         private void CancelGroundSupportHailAudioAndRescheduleOthers(GroundSupportGroup excluded, float now)
@@ -666,6 +806,7 @@ namespace RadioChatter.Comms
 
         private void DisableGroundSupportRequests()
         {
+            _nextGroundSupportHailAllowedAt = 0f;
             if (_groundSupportGroups.Count == 0 && _activeGroundSupportGroup == null)
                 return;
 
@@ -678,11 +819,13 @@ namespace RadioChatter.Comms
                 item.Type == RadioEventType.GroundSupportAcknowledged ||
                 item.Type == RadioEventType.GroundSupportVector ||
                 item.Type == RadioEventType.GroundSupportDeclined ||
+                item.Type == RadioEventType.GroundSupportCompleted ||
                 item.Type == RadioEventType.GroundSupportCanceled);
             _output.StopTransmissions(RadioEventType.GroundSupportHail);
             _output.StopTransmissions(RadioEventType.GroundSupportAcknowledged);
             _output.StopTransmissions(RadioEventType.GroundSupportVector);
             _output.StopTransmissions(RadioEventType.GroundSupportDeclined);
+            _output.StopTransmissions(RadioEventType.GroundSupportCompleted);
             _output.StopTransmissions(RadioEventType.GroundSupportCanceled);
         }
 
@@ -699,15 +842,19 @@ namespace RadioChatter.Comms
                 {
                     if (_announcedDestroyedUnits.Add(unit.Id))
                         _log.LogInfo($"Event: unit destroyed by polling: {unit.DisplayName}");
+
+                    HandleGroundSupportAttackerDestroyed(unit.Id);
                 }
 
                 _lastDisabledState[unit.Id] = unit.Disabled;
             }
+
+            ResolveDestroyedGroundSupportThreats(snapshot.Time);
         }
 
         private void DetectContacts(Snapshot snapshot)
         {
-            if (!_config.NewContactCalls.Value || _routineAwacsQuiet)
+            if (!_config.NewContactCalls.Value || _routineAwacsQuiet || SuppressAutomaticAirContacts())
                 return;
 
             for (int i = 0; i < snapshot.Contacts.Count; i++)
@@ -776,10 +923,14 @@ namespace RadioChatter.Comms
 
         private void DetectEjection(Snapshot snapshot)
         {
-            if (!_config.PlayerEjectionCalls.Value || _ejectionAnnounced || !snapshot.Player.Ejected)
+            if (_ejectionAnnounced || !snapshot.Player.Ejected)
                 return;
 
             _ejectionAnnounced = true;
+            ResetMissionRoleToGeneral("ejection", snapshot.Time, false);
+
+            if (!_config.PlayerEjectionCalls.Value)
+                return;
 
             if (IsNormalAirportExitEjection(snapshot))
             {
@@ -812,6 +963,8 @@ namespace RadioChatter.Comms
         {
             if (!snapshot.Player.Destroyed || snapshot.Player.Ejected)
                 return false;
+
+            ResetMissionRoleToGeneral("aircraft destroyed", snapshot.Time, false);
 
             if (!_destroyedAudioStopped)
                 StopAudioForPlayerDestroyed();
@@ -1285,9 +1438,23 @@ namespace RadioChatter.Comms
             _startupAwacsTransmissions.Clear();
             _startupAwacsReleased = true;
             _startupRadioGateActive = false;
+            ReleasePendingGroundSupportHails(now);
             _log.LogDebug(timedOut
                 ? "Startup radio gate released (timeout)."
                 : "Startup radio gate released (takeoff sequence complete or not applicable).");
+        }
+
+        private void ReleasePendingGroundSupportHails(float now)
+        {
+            if (_stableGrounded != false)
+                return;
+
+            for (int i = 0; i < _groundSupportGroups.Count; i++)
+            {
+                GroundSupportGroup group = _groundSupportGroups[i];
+                if (group.Pending && !group.Closed && !group.Dismissed)
+                    group.NextHailAt = Mathf.Min(group.NextHailAt, now);
+            }
         }
 
         /// <summary>With voice commands on and RequestDriven set, clearances and AWACS info are
@@ -1308,10 +1475,10 @@ namespace RadioChatter.Comms
 
         private void DetectTower(Snapshot snapshot)
         {
-            if (!TryGetHomeBase(snapshot, out AirbaseInfo home, out float distanceM))
-                return;
-
-            bool nearBase = IsNearAirbase(home, distanceM);
+            AirbaseInfo home;
+            float distanceM;
+            bool hasHomeBase = TryGetHomeBase(snapshot, out home, out distanceM);
+            bool nearBase = hasHomeBase && IsNearAirbase(home, distanceM);
 
             if (snapshot.Player.Grounded)
             {
@@ -1330,7 +1497,10 @@ namespace RadioChatter.Comms
                 _stableGrounded = true;
 
                 if (wasAirborne)
+                {
                     _awaitingAwacsCheckIn = false;
+                    ResetMissionRoleToGeneral("landing", snapshot.Time, true);
+                }
 
                 if (!wasAirborne && nearBase && _config.TakeoffCalls.Value && !_takeoffClearanceAnnounced &&
                     !RequestDrivenComms())
@@ -1357,6 +1527,10 @@ namespace RadioChatter.Comms
                 bool wasGrounded = _stableGrounded == true;
                 _stableGrounded = false;
                 _successfulAirportLanding = false;
+                ReleasePendingGroundSupportHails(snapshot.Time);
+
+                if (wasGrounded)
+                    ResetMissionRoleToGeneral("takeoff", snapshot.Time, true);
 
                 if (wasGrounded && nearBase && _config.TakeoffCalls.Value && !_airborneAnnounced)
                 {
@@ -1418,23 +1592,20 @@ namespace RadioChatter.Comms
             }
         }
 
-        /// <summary>Quiet automatic combat information only from a reliable Winchester state
-        /// or an explicit player command. Flight direction is deliberately not treated as intent.
+        /// <summary>Quiet automatic combat information only from an explicit player command.
+        /// Weapon state and flight direction are deliberately not treated as intent.
         /// This never gates urgent calls or direct voice-command responses.</summary>
         private void UpdateRoutineAwacsQuietState(Snapshot snapshot)
         {
-            bool winchester = !snapshot.Player.Grounded &&
-                              snapshot.Player.WeaponAmmoKnown &&
-                              !snapshot.Player.HasUsableWeapons;
-            bool automaticWinchesterQuiet = _config.QuietAwacsWhenWinchester.Value && winchester;
             bool quiet = _awacsTrafficMode == AwacsTrafficMode.Quiet ||
-                         (_awacsTrafficMode == AwacsTrafficMode.Automatic && automaticWinchesterQuiet);
+                         _awacsTrafficMode == AwacsTrafficMode.Winchester;
             if (quiet == _routineAwacsQuiet)
                 return;
 
             _routineAwacsQuiet = quiet;
             if (!quiet)
             {
+                ReleasePendingGroundSupportHails(snapshot.Time);
                 _log.LogDebug("Routine AWACS automatic callouts restored.");
                 return;
             }
@@ -1442,10 +1613,14 @@ namespace RadioChatter.Comms
             // Forced/player-requested contact calls use BypassStartupHold and are preserved.
             _queue.RemoveAll(item => IsContactInfoCall(item.Type) && !item.BypassStartupHold);
             _startupAwacsTransmissions.RemoveAll(item => IsContactInfoCall(item.Type));
+            if (_awacsTrafficMode == AwacsTrafficMode.Winchester)
+                StopGroundSupportHails();
             _previousRtbHomeDistance = float.NaN;
             _rtbInboundStartedAt = float.NaN;
             _rtbLastInboundAt = float.NaN;
-            string reason = _awacsTrafficMode == AwacsTrafficMode.Quiet ? "player-requested radio quiet" : "Winchester";
+            string reason = _awacsTrafficMode == AwacsTrafficMode.Quiet
+                ? "player-requested radio quiet"
+                : "player-declared Winchester";
             _log.LogInfo($"Routine AWACS automatic callouts quieted: {reason}.");
         }
 
@@ -1569,7 +1744,7 @@ namespace RadioChatter.Comms
             // Acceptances require both callsigns; a decline needs the ground callsign plus
             // unmistakable negative wording such as "unable".
             if ((intent.Station == VoiceStation.Unspecified || VoiceIntentParser.IsGroundSupportDecline(text)) &&
-                TryHandleGroundSupportTransmission(text, now))
+                TryHandleGroundSupportTransmission(snapshot, text, now))
                 return;
 
             if (TryHandleTowerReadback(text, intent, now))
@@ -1577,7 +1752,12 @@ namespace RadioChatter.Comms
 
             // Radio discipline: a proper call is "<station>, [this is] <callsign>, <request>".
             // A malformed call gets a corrective reply instead of an answer.
-            if (_config.VoiceRequireProperCalls.Value)
+            // "mission <role>" is itself an explicit mode-selection command. Keep it usable as
+            // a terse cockpit control even when ordinary radio requests require full phraseology.
+            bool explicitMissionCommand = intent.Kind == VoiceIntentKind.SetMissionRole &&
+                                          VoiceIntentParser.ContainsMissionCommandWord(text);
+            bool explicitStateDeclaration = intent.Kind == VoiceIntentKind.DeclareWinchester;
+            if (_config.VoiceRequireProperCalls.Value && !explicitMissionCommand && !explicitStateDeclaration)
             {
                 if (!intent.StationAddressed)
                 {
@@ -1622,17 +1802,23 @@ namespace RadioChatter.Comms
                 case VoiceIntentKind.RequestVectorHome:
                     RespondVectorHome(snapshot, now, callsign);
                     break;
+                case VoiceIntentKind.DeclareWinchester:
+                    SetAwacsTrafficMode(AwacsTrafficMode.Winchester, now, callsign);
+                    break;
                 case VoiceIntentKind.RequestAwacsQuiet:
                     SetAwacsTrafficMode(AwacsTrafficMode.Quiet, now, callsign);
                     break;
                 case VoiceIntentKind.RequestAwacsResume:
                     SetAwacsTrafficMode(AwacsTrafficMode.Normal, now, callsign);
                     break;
+                case VoiceIntentKind.SetMissionRole:
+                    RespondMissionRoleCheckIn(snapshot, intent.MissionRole, now, callsign);
+                    break;
                 case VoiceIntentKind.CheckIn:
                     if (intent.Station == VoiceStation.Tower)
                         QueueVoiceResponse(RadioRole.Tower, RadioEventType.VoiceCommandResponse, "say_again_tower", VoiceSlots(callsign), now);
                     else
-                        RespondAwacsCheckIn(now, callsign);
+                        RespondAwacsCheckIn(snapshot, now, callsign);
                     break;
                 case VoiceIntentKind.RadioCheck:
                     if (intent.Station == VoiceStation.Tower)
@@ -1649,18 +1835,161 @@ namespace RadioChatter.Comms
             }
         }
 
+        private void RespondMissionRoleCheckIn(
+            Snapshot snapshot,
+            FlightMissionRole role,
+            float now,
+            string callsign)
+        {
+            bool groundWasSuppressed = SuppressGroundSupportHails();
+            _flightMissionRole = role;
+            _awaitingAwacsCheckIn = false;
+            _output.ClearAwacsCheckInPrompt();
+
+            if (SuppressGroundSupportHails())
+            {
+                _queue.RemoveAll(item => item.Type == RadioEventType.GroundSupportHail);
+                _output.StopTransmissions(RadioEventType.GroundSupportHail);
+            }
+            else if (groundWasSuppressed)
+            {
+                for (int i = 0; i < _groundSupportGroups.Count; i++)
+                {
+                    GroundSupportGroup group = _groundSupportGroups[i];
+                    if (group.Pending && !group.Closed && !group.Dismissed)
+                        group.NextHailAt = Mathf.Min(group.NextHailAt, now);
+                }
+            }
+
+            if (SuppressAutomaticAirContacts())
+            {
+                _queue.RemoveAll(item => item.Type == RadioEventType.NewContact);
+                _startupAwacsTransmissions.RemoveAll(item => item.Type == RadioEventType.NewContact);
+                _output.StopTransmissions(RadioEventType.NewContact);
+            }
+
+            Dictionary<string, string> slots = VoiceSlots(callsign);
+            if (role == FlightMissionRole.Sead)
+            {
+                RadarEmitterInfo emitter;
+                if (TryNearestRadarEmitter(snapshot, out emitter))
+                {
+                    slots["bearing"] = NumberSpeech.Bearing(GPos.Bearing(snapshot.Player.Position, emitter.Position));
+                    slots["range"] = RadioText.FormatRange(
+                        GPos.Distance2D(snapshot.Player.Position, emitter.Position), snapshot.Units);
+                    slots["type"] = RadioText.SpokenUnitName(emitter.DisplayName);
+                    QueueVoiceResponse(RadioRole.Awacs, RadioEventType.VoiceCommandResponse,
+                        "awacs_mission_sead", slots, now);
+                }
+                else
+                {
+                    QueueVoiceResponse(RadioRole.Awacs, RadioEventType.VoiceCommandResponse,
+                        "awacs_mission_sead_clean", slots, now);
+                }
+            }
+            else if (role == FlightMissionRole.None)
+            {
+                QueueVoiceResponse(RadioRole.Awacs, RadioEventType.VoiceCommandResponse,
+                    "awacs_mission_general", slots, now);
+            }
+            else
+            {
+                slots["mission"] = MissionRoleSpeech(role);
+                QueueVoiceResponse(RadioRole.Awacs, RadioEventType.VoiceCommandResponse,
+                    "awacs_mission_check_in", slots, now);
+            }
+
+            _log.LogInfo($"Flight mission role set to {role}; ground hails suppressed={SuppressGroundSupportHails()}, new-contact calls suppressed={SuppressAutomaticAirContacts()}.");
+        }
+
+        private void ResetMissionRoleToGeneral(string reason, float now, bool releaseGroundHails)
+        {
+            if (_flightMissionRole == FlightMissionRole.None)
+                return;
+
+            bool groundWasSuppressed = SuppressGroundSupportHails();
+            FlightMissionRole previous = _flightMissionRole;
+            _flightMissionRole = FlightMissionRole.None;
+
+            if (releaseGroundHails && groundWasSuppressed)
+            {
+                for (int i = 0; i < _groundSupportGroups.Count; i++)
+                {
+                    GroundSupportGroup group = _groundSupportGroups[i];
+                    if (group.Pending && !group.Closed && !group.Dismissed)
+                        group.NextHailAt = Mathf.Min(group.NextHailAt, now);
+                }
+            }
+
+            _log.LogInfo($"Flight mission role reset from {previous} to General: {reason}.");
+        }
+
+        private bool SuppressGroundSupportHails()
+        {
+            return FlightMissionRolePolicy.SuppressGroundSupportHails(_flightMissionRole) ||
+                   _awacsTrafficMode == AwacsTrafficMode.Winchester;
+        }
+
+        private void StopGroundSupportHails()
+        {
+            _queue.RemoveAll(item => item.Type == RadioEventType.GroundSupportHail);
+            _output.StopTransmissions(RadioEventType.GroundSupportHail);
+        }
+
+        private bool SuppressAutomaticAirContacts()
+        {
+            return FlightMissionRolePolicy.SuppressAutomaticAirContacts(_flightMissionRole);
+        }
+
+        private static string MissionRoleSpeech(FlightMissionRole role)
+        {
+            switch (role)
+            {
+                case FlightMissionRole.Cap: return "combat air patrol";
+                case FlightMissionRole.Cas: return "close air support";
+                case FlightMissionRole.Strike: return "strike";
+                case FlightMissionRole.SearchAndDestroy: return "search and destroy";
+                default: return "general mission";
+            }
+        }
+
+        private static bool TryNearestRadarEmitter(Snapshot snapshot, out RadarEmitterInfo nearest)
+        {
+            nearest = default;
+            float bestDistance = float.PositiveInfinity;
+            for (int i = 0; i < snapshot.RadarEmitters.Count; i++)
+            {
+                RadarEmitterInfo candidate = snapshot.RadarEmitters[i];
+                float distance = GPos.Distance2D(snapshot.Player.Position, candidate.Position);
+                if (distance >= bestDistance)
+                    continue;
+
+                bestDistance = distance;
+                nearest = candidate;
+            }
+
+            return !float.IsPositiveInfinity(bestDistance);
+        }
+
         private void SetAwacsTrafficMode(AwacsTrafficMode mode, float now, string callsign)
         {
             _awacsTrafficMode = mode;
-            string phraseKey = mode == AwacsTrafficMode.Quiet
-                ? "awacs_radio_quiet"
-                : "awacs_radio_resumed";
+            if (SuppressGroundSupportHails())
+                StopGroundSupportHails();
+            else
+                ReleasePendingGroundSupportHails(now);
+
+            string phraseKey = mode == AwacsTrafficMode.Winchester
+                ? "awacs_winchester"
+                : mode == AwacsTrafficMode.Quiet
+                    ? "awacs_radio_quiet"
+                    : "awacs_radio_resumed";
             QueueVoiceResponse(RadioRole.Awacs, RadioEventType.VoiceCommandResponse,
                 phraseKey, VoiceSlots(callsign), now);
             _log.LogInfo($"AWACS traffic mode set to {mode} by player voice command.");
         }
 
-        private bool TryHandleGroundSupportTransmission(string text, float now)
+        private bool TryHandleGroundSupportTransmission(Snapshot snapshot, string text, float now)
         {
             if (!GroundSupportEnabled())
                 return false;
@@ -1718,7 +2047,7 @@ namespace RadioChatter.Comms
 
             if (selected.Accepted && _activeGroundSupportGroup == selected)
             {
-                QueueGroundSupportAcknowledgement(selected, _config.PlayerCallsign.Value, now, true);
+                QueueGroundSupportAcknowledgement(snapshot, selected, _config.PlayerCallsign.Value, now, true);
                 _log.LogInfo($"Ground support follow-up addressed to {selected.Callsign}.");
                 return true;
             }
@@ -1730,6 +2059,7 @@ namespace RadioChatter.Comms
                 previous.Pending = false;
                 previous.Dismissed = true;
                 previous.DismissedAt = now;
+                previous.Resolved = false;
                 RemoveQueuedGroundSupport(previous.Id);
                 _log.LogInfo($"Ground support task switched from {previous.Callsign} to {selected.Callsign}.");
             }
@@ -1738,6 +2068,7 @@ namespace RadioChatter.Comms
             selected.Pending = false;
             selected.Accepted = true;
             selected.Dismissed = false;
+            selected.Resolved = false;
             RemoveQueuedGroundSupport(selected.Id);
             CancelGroundSupportHailAudioAndRescheduleOthers(selected, now);
 
@@ -1745,7 +2076,7 @@ namespace RadioChatter.Comms
             CancelVectorCalls();
             _queue.RemoveAll(item => item.Type == RadioEventType.GroundSupportVector);
             _output.StopTransmissions(RadioEventType.GroundSupportVector);
-            QueueGroundSupportAcknowledgement(selected, _config.PlayerCallsign.Value, now, false);
+            QueueGroundSupportAcknowledgement(snapshot, selected, _config.PlayerCallsign.Value, now, false);
             _log.LogInfo($"Ground support request accepted: {selected.Callsign}.");
             return true;
         }
@@ -1757,6 +2088,7 @@ namespace RadioChatter.Comms
             group.Accepted = false;
             group.Dismissed = true;
             group.DismissedAt = now;
+            group.Resolved = false;
 
             RemoveQueuedGroundSupport(group.Id);
             CancelGroundSupportHailAudioAndRescheduleOthers(group, now);
@@ -1786,8 +2118,14 @@ namespace RadioChatter.Comms
             return separator > 0 ? callsign.Substring(0, separator) : callsign;
         }
 
-        private void RespondAwacsCheckIn(float now, string callsign)
+        private void RespondAwacsCheckIn(Snapshot snapshot, float now, string callsign)
         {
+            if (_flightMissionRole != FlightMissionRole.None)
+            {
+                RespondMissionRoleCheckIn(snapshot, _flightMissionRole, now, callsign);
+                return;
+            }
+
             _awaitingAwacsCheckIn = false;
             _output.ClearAwacsCheckInPrompt();
             QueueVoiceResponse(RadioRole.Awacs, RadioEventType.VoiceCommandResponse,
@@ -2563,6 +2901,8 @@ namespace RadioChatter.Comms
                 _queue.RemoveAt(bestIndex);
                 _log.LogInfo($"[{transmission.Role}] {transmission.Text}");
                 _output.Transmit(transmission.Role, transmission.Type, transmission.Text, transmission.DisplaySeconds);
+                if (transmission.Type == RadioEventType.GroundSupportHail)
+                    StartGroundSupportHailCooldown(now);
                 transmitted++;
 
                 // One informational call per contact per burst; queued repeats are now redundant.
@@ -2750,6 +3090,8 @@ namespace RadioChatter.Comms
             _rtbLastInboundAt = float.NaN;
             _routineAwacsQuiet = false;
             _awacsTrafficMode = AwacsTrafficMode.Automatic;
+            _flightMissionRole = FlightMissionRole.None;
+            _nextGroundSupportHailAllowedAt = 0f;
             ClearPlayerWeaponHoldState();
             _queue.Clear();
             for (int i = 0; i < _groundSupportGroups.Count; i++)
@@ -2780,7 +3122,7 @@ namespace RadioChatter.Comms
                 return;
 
             _nextSnapshotLogTime = snapshot.Time + 5f;
-            _log.LogDebug($"Snapshot: player={snapshot.Player.AircraftName} pos=({snapshot.Player.Position.x:0},{snapshot.Player.Position.y:0},{snapshot.Player.Position.z:0}) hdg={snapshot.Player.HeadingDeg:0} speed={snapshot.Player.SpeedMs:0} contacts={snapshot.Contacts.Count} missiles={snapshot.MissileThreats.Count} bases={snapshot.FriendlyAirbases.Count}");
+            _log.LogDebug($"Snapshot: player={snapshot.Player.AircraftName} pos=({snapshot.Player.Position.x:0},{snapshot.Player.Position.y:0},{snapshot.Player.Position.z:0}) hdg={snapshot.Player.HeadingDeg:0} speed={snapshot.Player.SpeedMs:0} contacts={snapshot.Contacts.Count} emitters={snapshot.RadarEmitters.Count} missiles={snapshot.MissileThreats.Count} bases={snapshot.FriendlyAirbases.Count}");
         }
 
         private static float CalculateDisplaySeconds(string text, float requestedSeconds)
@@ -2839,6 +3181,7 @@ namespace RadioChatter.Comms
             public string Callsign;
             public GPos Position;
             public readonly HashSet<uint> MemberIds = new HashSet<uint>();
+            public readonly GroundSupportThreatTracker Threats = new GroundSupportThreatTracker();
             public float LastAttackAt;
             public float LastSeenAliveAt;
             public float LastHailAt;
@@ -2847,6 +3190,8 @@ namespace RadioChatter.Comms
             public bool Pending;
             public bool Accepted;
             public bool Dismissed;
+            public bool Resolved;
+            public bool ThreatResolutionPending;
             public bool Closed;
         }
 
@@ -2861,6 +3206,7 @@ namespace RadioChatter.Comms
         {
             Automatic,
             Quiet,
+            Winchester,
             Normal
         }
 

@@ -50,8 +50,6 @@ namespace RadioChatter.Game
         public bool GearDown;
         public bool Grounded;            // gear down + ~0 AGL (debounced by detectors, raw here)
         public float FuelFraction;       // 0..1
-        public bool WeaponAmmoKnown;     // at least one offensive weapon station was found
-        public bool HasUsableWeapons;    // offensive station still has ammunition
         public bool Ejected;
         public bool Destroyed;
     }
@@ -87,6 +85,13 @@ namespace RadioChatter.Game
         public bool HasPosition;         // some objectives (e.g. "successful sortie") have no position
         public GPos Position;            // closest position of this objective to the player
         public float DistanceM;          // sort key; float.MaxValue when HasPosition is false
+    }
+
+    public struct RadarEmitterInfo
+    {
+        public uint Id;
+        public string DisplayName;
+        public GPos Position;
     }
 
     public struct MissileThreat
@@ -127,6 +132,7 @@ namespace RadioChatter.Game
         public bool HasSelectedTarget;
         public ContactInfo SelectedTarget;
         public readonly List<ObjectiveInfo> Objectives = new List<ObjectiveInfo>(8);   // active, non-hidden
+        public readonly List<RadarEmitterInfo> RadarEmitters = new List<RadarEmitterInfo>(16); // hostile active surface emitters
 
         public void Clear()
         {
@@ -139,6 +145,7 @@ namespace RadioChatter.Game
             HasSelectedTarget = false;
             SelectedTarget = default;
             Objectives.Clear();
+            RadarEmitters.Clear();
         }
     }
 }

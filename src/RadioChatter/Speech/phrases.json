@@ -106,6 +106,10 @@
     "{callsign}, {awacs}, radio quiet. Emergency and requested traffic only",
     "{callsign}, {awacs}, copy radio quiet. Holding routine calls"
   ],
+  "awacs_winchester": [
+    "{callsign}, {awacs}, copy Winchester. Emergency and requested traffic only",
+    "{callsign}, {awacs}, Winchester acknowledged. Holding routine calls"
+  ],
   "awacs_radio_resumed": [
     "{callsign}, {awacs}, normal traffic restored",
     "{callsign}, {awacs}, copy, resuming routine calls"
@@ -114,6 +118,22 @@
     "{callsign}, {awacs}, radar contact, check-in acknowledged",
     "{callsign}, {awacs}, radar contact, proceed on mission",
     "{callsign}, {awacs}, radar contact, welcome aboard"
+  ],
+  "awacs_mission_check_in": [
+    "{callsign}, {awacs}, radar contact. Mission {mission} acknowledged, as fragged",
+    "{callsign}, {awacs}, check-in acknowledged. Assigned mission {mission}"
+  ],
+  "awacs_mission_sead": [
+    "{callsign}, {awacs}, radar contact. Mission SEAD acknowledged, as fragged. Nearest active emitter bearing {bearing}, range {range}, {type}",
+    "{callsign}, {awacs}, assigned mission SEAD. Active emitter bearing {bearing}, range {range}, type {type}"
+  ],
+  "awacs_mission_sead_clean": [
+    "{callsign}, {awacs}, radar contact. Mission SEAD acknowledged, as fragged. No active surface emitters detected",
+    "{callsign}, {awacs}, assigned mission SEAD. Emitter picture empty"
+  ],
+  "awacs_mission_general": [
+    "{callsign}, {awacs}, general mission acknowledged. All traffic enabled",
+    "{callsign}, {awacs}, mission role cleared. Resume all traffic"
   ],
   "battlefield_weapon": [
     "{type} flight, {call}",
@@ -136,13 +156,13 @@
     "{type} flight, hit, losing the aircraft"
   ],
   "ground_support_hail": [
-    "any available aircraft, this is {ground_callsign}. Troops in contact, requesting support. Location bearing {bearing}, range {range}. Call {ground_callsign} with your callsign if you can assist",
-    "all aircraft, {ground_callsign} is taking fire and requests immediate support. Position bearing {bearing}, range {range}. Address {ground_callsign} and identify yourself if inbound"
+    "any available aircraft, this is {ground_callsign}. Troops in contact, requesting support. Call {ground_callsign} with your callsign if you can assist",
+    "all aircraft, {ground_callsign} is taking fire and requests immediate support. Address {ground_callsign} and identify yourself if inbound"
   ],
   "ground_support_acknowledged": [
-    "{callsign}, {ground_callsign}, roger. Please hurry",
-    "{callsign}, {ground_callsign}, copy, you are inbound. What is your E T A?",
-    "{callsign}, {ground_callsign}, acknowledged. We will hold as long as we can"
+    "{callsign}, {ground_callsign}, roger. Our position bearing {bearing}, range {range}. Please hurry",
+    "{callsign}, {ground_callsign}, copy, you are inbound. Position bearing {bearing}, range {range}. What is your E T A?",
+    "{callsign}, {ground_callsign}, acknowledged. We are bearing {bearing}, range {range}. We will hold as long as we can"
   ],
   "ground_support_followup_ack": [
     "{callsign}, {ground_callsign}, roger",
@@ -153,6 +173,11 @@
     "aircraft declining, {ground_callsign}, roger. We will keep the request open to others",
     "{ground_callsign}, copy unable. We will seek other support",
     "negative support received, {ground_callsign}, understood"
+  ],
+  "ground_support_completed": [
+    "{callsign}, {ground_callsign}. Attacker destroyed. Thank you for the assistance",
+    "{callsign}, {ground_callsign}. Hostile unit destroyed. We appreciate the help",
+    "{callsign}, {ground_callsign}. Threat eliminated. Thanks for the support"
   ],
   "awacs_ground_support_vector": [
     "{callsign}, {awacs}, vector to {ground_callsign}, bearing {bearing}, range {range}",

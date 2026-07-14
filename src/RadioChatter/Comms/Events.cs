@@ -45,6 +45,7 @@ namespace RadioChatter.Comms
         GroundSupportAcknowledged,
         GroundSupportVector,
         GroundSupportDeclined,
+        GroundSupportCompleted,
         GroundSupportCanceled,
         InGameComms,
         PlayerVoiceCommand,
@@ -64,6 +65,8 @@ namespace RadioChatter.Comms
         public GPos Position;
         public float BearingDeg;
         public float DistanceM;
+        /// <summary>Hostile ground unit responsible for a GroundUnitUnderAttack event.</summary>
+        public uint AttackerId;
         public string Text;
     }
 

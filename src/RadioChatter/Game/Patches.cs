@@ -122,8 +122,8 @@ namespace RadioChatter.Game
         // Automatic weapons call WeaponStation.Fire repeatedly. The director performs the
         // longer group-level suppression; this short throttle keeps the event bus itself quiet.
         private const float PerVehicleEventSeconds = 2f;
-        private static readonly System.Collections.Generic.Dictionary<uint, float> LastEventAt =
-            new System.Collections.Generic.Dictionary<uint, float>(64);
+        private static readonly System.Collections.Generic.Dictionary<ulong, float> LastEventAt =
+            new System.Collections.Generic.Dictionary<ulong, float>(64);
 
         public static void TryEnqueue(global::Unit victim, global::Unit attacker)
         {
@@ -145,15 +145,19 @@ namespace RadioChatter.Game
                 }
 
                 uint victimId = GameAdapter.PersistentId(victim);
+                uint attackerId = attacker is global::GroundVehicle
+                    ? GameAdapter.PersistentId(attacker)
+                    : 0;
+                ulong attackKey = ((ulong)victimId << 32) | attackerId;
                 float now = Time.unscaledTime;
                 float last;
                 if (victimId == 0 ||
-                    (LastEventAt.TryGetValue(victimId, out last) && now - last < PerVehicleEventSeconds))
+                    (LastEventAt.TryGetValue(attackKey, out last) && now - last < PerVehicleEventSeconds))
                 {
                     return;
                 }
 
-                LastEventAt[victimId] = now;
+                LastEventAt[attackKey] = now;
                 RadioEventBus.Enqueue(new RadioEvent
                 {
                     Type = RadioEventType.GroundUnitUnderAttack,
@@ -161,6 +165,7 @@ namespace RadioChatter.Game
                     SubjectName = GameAdapter.RadioName(victim),
                     SubjectIsFriendly = true,
                     Position = GameAdapter.PositionOf(victim),
+                    AttackerId = attackerId,
                     Text = GameAdapter.RadioName(attacker)
                 });
             }

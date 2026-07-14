@@ -777,6 +777,7 @@ namespace RadioChatter.Audio
                 type == RadioEventType.GroundSupportAcknowledged ||
                 type == RadioEventType.GroundSupportVector ||
                 type == RadioEventType.GroundSupportDeclined ||
+                type == RadioEventType.GroundSupportCompleted ||
                 type == RadioEventType.GroundSupportCanceled)
             {
                 return true;

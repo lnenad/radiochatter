@@ -39,6 +39,150 @@ current mission.
 The mod targets **singleplayer and host-side play**. Multiplayer clients are detected and the
 mod disables itself rather than read state it does not own.
 
+> [!NOTE]
+> **Radio workflow additions:** ground-support incidents are spatially grouped under persistent
+> callsigns and tracked while the player is on the ramp, but hails wait for confirmed takeoff and
+> the Tower-to-AWACS startup gate. Hails are globally separated by at least 20 seconds and carry no
+> player-relative navigation until accepted. Players can accept with natural wording containing
+> both callsigns, decline with broad negative wording, switch the active secondary by accepting a
+> different group, and request updated vectors from AWACS. Destroying the last tracked attacker
+> clears the secondary and prompts a thank-you from the ground unit; unanswered hails repeat on the
+> configured interval. Explicit CAP/CAS/SEAD/strike/search-and-destroy roles filter irrelevant
+> unsolicited traffic, AWACS reads the role back, and flight-state transitions reset it to General.
+> Pilot-declared `Winchester` suppresses routine AWACS traffic and new/repeated ground-support
+> hails; weapon state is never inferred. `radio quiet` is AWACS-only, and `resume calls` restores
+> eligible traffic. Incoming audio is ducked during push-to-talk.
+
+<details>
+<summary><strong>Example mission dialogue — takeoff, tasking, ground support, and Winchester</strong></summary>
+
+`[SYSTEM]` lines explain internal state and are not spoken over the radio. Bearings and ranges are
+examples; live values come from the mission.
+
+```text
+[SYSTEM]  Anvil 1 comes under fire while Broadsword 1-1 is on the ramp. The request and its
+          attackers are tracked, but no ground hail is transmitted before takeoff. Nearby friendly
+          vehicles join Anvil 1's spatial group instead of generating separate callsigns or hails.
+
+[TWR]     Broadsword 1-1, winds calm, runway two seven, cleared for takeoff.
+[PLAYER]  Cleared for takeoff runway two seven, Broadsword 1-1.
+[TWR]     Broadsword 1-1, airborne, contact Overwatch.
+[PLAYER]  Contact Overwatch, Broadsword 1-1.
+[SYSTEM]  Ground hails remain held through the Tower handoff and AWACS startup gate.
+
+[PLAYER]  Overwatch, Broadsword 1-1, checking in, SEAD as fragged.
+[AWACS]   Broadsword 1-1, Overwatch, mission SEAD acknowledged, as fragged. Nearest active
+          emitter bearing zero eight five, range three two kilometers, surface-to-air missile site.
+[SYSTEM]  SEAD suppresses generic ground hails and automatic new-air-contact calls. Requested
+          information and urgent warnings still pass.
+
+[PLAYER]  Mission search and destroy.
+[AWACS]   Broadsword 1-1, Overwatch, assigned mission search and destroy.
+[SYSTEM]  Search and destroy uses strike-like filtering: ground hails remain muted while automatic
+          new-air-contact calls are retained.
+
+[PLAYER]  Mission CAS.
+[AWACS]   Broadsword 1-1, Overwatch, assigned mission close air support.
+[SYSTEM]  CAS enables ground hails and suppresses automatic new-air-contact calls. Anvil 1 is still
+          under attack, so its pending request is now eligible.
+
+[GROUND]  Any available aircraft, this is Anvil 1. Troops in contact, requesting support. Call
+          Anvil 1 with your callsign if you can assist.
+[SYSTEM]  Hammer 1 is attacked eight seconds later. Its separate hail is held by the global
+          20-second ground-support filter; the incident is not discarded.
+
+[PLAYER]  Anvil, this is Broadsword 1-1, inbound, hold on.
+[GROUND]  Broadsword 1-1, Anvil 1, copy, you are inbound. Position bearing one seven zero,
+          range one four kilometers. What is your E T A?
+[PLAYER]  Anvil 1, Broadsword 1-1, two minutes out.
+[GROUND]  Broadsword 1-1, Anvil 1, copy your last. We will hold.
+
+[PLAYER]  Overwatch, Broadsword 1-1, request vector to secondary.
+[AWACS]   Broadsword 1-1, Overwatch, vector to Anvil 1, bearing one six eight,
+          range one two kilometers.
+[SYSTEM]  Vectors are sent only when requested, so their bearing and range use the player's
+          current position rather than becoming stale automatic updates. "Vector to Anvil" is
+          also valid; a plain "request vector" keeps its original air-target meaning.
+
+[GROUND]  All aircraft, Hammer 1 is taking fire and requests immediate support. Address Hammer 1
+          and identify yourself if inbound.
+[PLAYER]  Overwatch, Broadsword 1-1, request vector to last support request.
+[AWACS]   Broadsword 1-1, Overwatch, vector to Hammer 1, bearing two one five,
+          range one eight kilometers.
+[PLAYER]  Hammer 1, unable.
+[GROUND]  Hammer 1, copy unable. We will seek other support.
+
+[GROUND]  All aircraft, Nomad 1 is taking fire and requests immediate support. Address Nomad 1
+          and identify yourself if inbound.
+[SYSTEM]  No aircraft responds. More than two minutes later, once the global filter is clear,
+          Nomad 1 repeats its unanswered hail.
+[GROUND]  Any available aircraft, this is Nomad 1. Troops in contact, requesting support. Call
+          Nomad 1 with your callsign if you can assist.
+[SYSTEM]  Nomad 1's tracked attacker is destroyed before anyone accepts. Its request closes
+          silently, so no stale pending task remains.
+
+[GROUND]  All aircraft, Ranger 1 is taking fire and requests immediate support. Address Ranger 1
+          and identify yourself if inbound.
+[PLAYER]  Ranger, Broadsword 1-1, inbound.
+[SYSTEM]  Accepting Ranger 1 cancels Anvil 1 as the active secondary. Future requests for
+          "secondary" now resolve to Ranger 1; other groups may still hail after the global filter.
+[GROUND]  Broadsword 1-1, Ranger 1, roger. Our position bearing two four zero,
+          range eight kilometers. Please hurry.
+[PLAYER]  Overwatch, Broadsword 1-1, request vector to Ranger.
+[AWACS]   Broadsword 1-1, Overwatch, vector to Ranger 1, bearing two three eight,
+          range seven kilometers.
+
+[SYSTEM]  Ranger 1 has two tracked attackers. The first is destroyed; the secondary stays active.
+[SYSTEM]  The second and last tracked attacker is destroyed; the secondary clears immediately.
+[GROUND]  Broadsword 1-1, Ranger 1. Attacker destroyed. Thank you for the assistance.
+[PLAYER]  Overwatch, Broadsword 1-1, request vector to secondary.
+[AWACS]   Broadsword 1-1, Overwatch, no available ground support request.
+
+[PLAYER]  Winchester to AWACS.
+[AWACS]   Broadsword 1-1, Overwatch, copy Winchester. Emergency and requested traffic only.
+[SYSTEM]  A new ground incident is tracked, but its hail and all repeats are suppressed while
+          Winchester is active. Existing accepted-task acknowledgements and requested info remain.
+[PLAYER]  Overwatch, Broadsword 1-1, request picture.
+[AWACS]   Broadsword 1-1, Overwatch, picture clean.
+[SYSTEM]  Winchester suppresses routine automatic AWACS traffic and ground-support hails, but
+          direct requests still work.
+
+[PLAYER]  Overwatch, Broadsword 1-1, resume calls.
+[AWACS]   Broadsword 1-1, Overwatch, normal traffic restored.
+[SYSTEM]  The still-valid pending ground incident becomes eligible again, subject to the global
+          20-second filter and the current mission role.
+[PLAYER]  Overwatch, Broadsword 1-1, radio quiet.
+[AWACS]   Broadsword 1-1, Overwatch, radio quiet. Emergency and requested traffic only.
+[SYSTEM]  Radio quiet is AWACS-only; it does not suppress ground-support hails.
+[PLAYER]  Overwatch, Broadsword 1-1, cancel radio quiet.
+[AWACS]   Broadsword 1-1, Overwatch, copy, resuming routine calls.
+
+[SYSTEM]  While push-to-talk is held for any player line above, incoming radio audio is reduced to
+          25 percent by default so the player's transmission remains intelligible.
+
+[TWR]     Broadsword 1-1, welcome home.
+[SYSTEM]  Confirmed landing resets the selected mission role to General and mutes new ground hails.
+          Death, ejection, takeoff, or changing aircraft also resets the role. Pending incidents
+          remain tracked and can hail after the next confirmed takeoff/startup gate.
+```
+
+Other valid role exchanges use the same explicit readback:
+
+```text
+[PLAYER]  Overwatch, Broadsword 1-1, checking in as CAP.
+[AWACS]   Broadsword 1-1, Overwatch, assigned mission combat air patrol.
+[SYSTEM]  CAP: ground hails muted; automatic new-air-contact calls retained.
+
+[PLAYER]  Overwatch, Broadsword 1-1, strike as fragged.
+[AWACS]   Broadsword 1-1, Overwatch, mission strike acknowledged, as fragged.
+[SYSTEM]  Strike: ground hails muted; automatic new-air-contact calls retained.
+
+[PLAYER]  Mission general.
+[AWACS]   Broadsword 1-1, Overwatch, general mission acknowledged. All traffic enabled.
+```
+
+</details>
+
 ## Features
 
 **Tower**
@@ -52,8 +196,12 @@ mod disables itself rather than read state it does not own.
 - Missile-threat warnings, kill confirmations, bingo-fuel and RTB advisories.
 - Smart de-duplication: calls about the same contact share a cooldown, stale calls are dropped
   the moment they would play (destroyed target, expired info, already-covered contact).
-- Automatic contact chatter quiets once the player is Winchester, or on the explicit voice command
-  *"radio quiet"*. Urgent warnings and player-requested replies remain available.
+- Routine contact chatter quiets only when the player explicitly declares *"Winchester"* or
+  *"radio quiet"*. Weapon depletion is never inferred. Urgent warnings and requested replies
+  remain available.
+- Explicit mission-role check-ins focus unsolicited traffic for CAP, CAS, SEAD, strike, or
+  search-and-destroy sorties.
+  A SEAD check-in includes bearing/range to the nearest active hostile surface radar emitter.
 
 **Player / pilot**
 - Weapon-release calls: `fox one!`, `fox two!`, `fox three!`, `rifle!`, `magnum!`, `pickle!`,
@@ -71,8 +219,8 @@ mod disables itself rather than read state it does not own.
 - Optional allied battlefield chatter reacts to real weapon releases, defensive reactions,
   takeoffs, landings, and aircraft losses without delaying higher-priority radio traffic.
 - Friendly ground groups under hostile fire broadcast a general support request with a persistent
-  callsign and a simple bearing/range location. Nearby vehicles share one request, preventing a
-  platoon from flooding the radio. Address the group using both callsigns, then ask AWACS for vectors.
+  callsign. Nearby vehicles share one request, preventing a platoon from flooding the radio. Once
+  accepted, the group sends its bearing/range; AWACS can provide updated vectors on request.
 
 **Voice commands (push-to-talk)**
 - Hold the push-to-talk key (default `Right Alt`), speak, release — your speech is transcribed
@@ -122,12 +270,26 @@ mod disables itself rather than read state it does not own.
   - *"...vector to home plate"* / *"request RTB"* → bearing and range to base.
   - *"Overwatch, Falcon 1-1, radio quiet"* → suppress routine automatic AWACS contact, picture,
     target-vector, and periodic RTB-vector calls. Flight direction is never used to infer this.
+  - *"Overwatch, Falcon 1-1, Winchester"* or *"Winchester to AWACS"* → explicitly declare no
+    weapons, suppress routine AWACS traffic, and suppress new/repeated ground-support hails. AWACS
+    acknowledges Winchester; the terse form is accepted even when proper calls are required.
   - *"Overwatch, Falcon 1-1, resume calls"* / *"cancel radio quiet"* → restore normal automatic
     AWACS traffic, even if the aircraft is Winchester.
+  - *"Overwatch, Falcon 1-1, checking in, SEAD as fragged"* → select SEAD for this aircraft.
+    AWACS explicitly reads back the selected mission, then reports the nearest active hostile
+    surface emitter by type, bearing, and range, or reports that the emitter picture is empty.
+  - Replace `SEAD` with `CAP`, `CAS` / `close air support`, `strike`, or `search and destroy` to
+    select another role. The terse command *"mission search and destroy"* also works without a
+    station/callsign preamble, even when proper calls are required. *"Mission general"* clears the
+    role the same way. Later plain AWACS check-ins repeat any currently selected mission. A plain
+    check-in with no prior selection preserves the current all-chatter behavior.
+    *"As fragged"* is optional but mirrors real mission-tasking language: the unit is operating
+    as briefed/scheduled.
   - *"Anvil, this is Falcon 1-1, inbound, hold on"* → accept Anvil's support request. The wording
     is free-form; the transmission only needs the ground and player callsigns. The group number
-    may be omitted while that callsign stem is unambiguous. The ground unit acknowledges and may
-    ask for an ETA. Accepting another group cancels the previous support task.
+    may be omitted while that callsign stem is unambiguous. The ground unit acknowledges with its
+    bearing/range from the accepting aircraft and may ask for an ETA. Accepting another group
+    cancels the previous support task.
   - *"Hammer 4, unable"* / *"negative Anvil, cannot assist"* → decline that request. A decline
     only needs the ground callsign and natural negative wording; the group acknowledges and stops
     hailing unless a genuinely new engagement begins after a quiet interval.
@@ -332,7 +494,6 @@ Same-channel chatter is serialized regardless of `MaxConcurrentTransmissions`.
 | `GroundSupportRequests` | `true` | Friendly ground groups under hostile fire broadcast a general request for air support. Requires voice commands so requests can be accepted. |
 | `GroundSupportGroupRadiusM` | `1000` | Vehicles within this radius share one mission-persistent ground callsign and request. |
 | `GroundSupportRepeatSeconds` | `120` | Repeat interval for an unaccepted support hail. |
-| `QuietAwacsWhenWinchester` | `true` | Quiet automatic new-contact, picture, target-vector, and periodic RTB-vector chatter when out of offensive weapons. Returning home is never inferred; use *"radio quiet"* explicitly. Missile/bingo warnings and requested replies still work. |
 
 </details>
 
@@ -491,12 +652,25 @@ screen. Nothing is skipped or lost because of a pause.
 - Splash/good-effect calls use the local kill display event.
 - RTB calls include a one-time bingo-fuel advisory below about 18 percent fuel and a
   home-plate vector after roughly 18 seconds of sustained inbound flight from 18-90 km out.
-- With `QuietAwacsWhenWinchester` enabled, live offensive weapon-station ammunition suppresses
-  automatic new-contact, picture, target-vector, and periodic RTB-vector chatter once all weapons
-  are expended. Flight direction is never interpreted as a desire for radio silence.
-- The player can explicitly request the same quiet mode with *"Overwatch, Falcon 1-1, radio quiet"*
-  and restore normal traffic with *"resume calls"* or *"cancel radio quiet"*. Missile warnings,
-  bingo fuel, kill confirmations, ground traffic, and all push-to-talk requests still pass through.
+- Weapon and ammunition state are deliberately not used to infer Winchester. The player must
+  declare *"Winchester"* over the radio. AWACS reads it back, queued/playing ground hails are
+  stopped, and pending incidents remain tracked silently. *"Resume calls"* restores eligible
+  AWACS and ground-hail traffic. Missile warnings, bingo fuel, kill confirmations, accepted
+  ground-task acknowledgements/closeouts, and all requested replies still pass through.
+- *"Radio quiet"* is intentionally narrower: it suppresses routine AWACS traffic but leaves ground
+  hails enabled. Restore it with *"resume calls"* or *"cancel radio quiet"*.
+- Mission-role selection is explicit. AWACS reads the role back on selection and repeats it on
+  later check-ins. Death, ejection, confirmed landing, takeoff, or changing aircraft resets it to
+  General until the player declares a role again. It filters only unsolicited role-irrelevant
+  traffic; voice-requested information and urgent warnings always remain:
+  - `CAP`: ground-support hails muted; automatic new-air-contact calls retained.
+  - `CAS`: ground-support hails retained; automatic new-air-contact calls muted.
+  - `SEAD`: both generic streams muted; check-in reports the nearest currently emitting hostile
+    surface radar with an arcade-readable bearing and range.
+  - `Strike`: ground-support hails muted; automatic new-air-contact calls retained.
+  - `Search and destroy`: strike-like filtering; ground-support hails muted and automatic
+    new-air-contact calls retained.
+  - No role / `mission general`: all chatter retained as before.
 
 </details>
 
@@ -509,22 +683,39 @@ screen. Nothing is skipped or lost because of a pause.
 - Attacks are clustered around the first vehicle in a `GroundSupportGroupRadiusM` radius.
   Vehicles in that cluster share one callsign (`Anvil`, `Hammer`, `Bison`, `Ranger`,
   `Sentinel`, or `Nomad`, with a persistent number) for the rest of the mission.
-- The hail is addressed to any available aircraft rather than directly to the player. It gives
-  bearing and range from the player's current position and explains how to respond. The reply may
-  use any natural wording, but must contain both the ground callsign and the configured player
-  callsign. The group's numeric suffix may be omitted while its stem is unique among available
-  requests.
+- The hail is addressed to any available aircraft rather than directly to the player, so it does
+  not give player-relative navigation. It explains how to respond. The reply may use any natural
+  wording, but must contain both the ground callsign and the configured player callsign. The
+  group's numeric suffix may be omitted while its stem is unique among available requests.
+- Requests are still detected and tracked while the player is on the ramp, but unsolicited hails
+  remain silent until the player is confirmed airborne and the Tower-to-AWACS startup gate has
+  cleared. Pending groups become immediately eligible at release; they do not wait through a full
+  repeat interval. Landing mutes new hails again until the next takeoff.
+- Unsolicited hails are held while the player is checked in as CAP, SEAD, strike, or search and
+  destroy. The request remains spatially grouped and can be heard later if the player switches to
+  CAS or clears the role.
+- Pilot-declared Winchester also holds new and repeated hails. The incidents and their attackers
+  continue tracking silently; *"resume calls"* makes valid pending groups immediately eligible
+  again. AWACS-only *"radio quiet"* does not suppress ground hails.
 - Unaccepted groups repeat their request every `GroundSupportRepeatSeconds`. Fire from another
-  vehicle in the same cluster updates the existing group instead of creating another hail.
+  vehicle in the same cluster updates the existing group instead of creating another hail. A
+  global 20-second filter after any support hail blocks every other group from transmitting during
+  that window; their requests continue tracking silently and remain eligible afterward.
 - A player can decline with the ground callsign plus broad negative wording, such as *"Hammer 4,
   unable"*, without also reciting the player callsign. The local request is dismissed and will not
   repeat under continuous fire; the same persistent group may call again only after a full quiet
   interval followed by a new attack.
-- Accepting a request makes it the active secondary support task. The ground unit acknowledges,
-  with responses such as *"roger, please hurry"* or *"what is your ETA?"*. Further transmissions
-  containing both callsigns receive a short ground acknowledgement. Automatic pilot
+- Accepting a request makes it the active secondary support task. The ground unit acknowledges
+  with bearing/range from the player's current position and a response such as *"please hurry"*
+  or *"what is your ETA?"*. Further transmissions containing both callsigns receive a short ground
+  acknowledgement without repeating stale navigation. Automatic pilot
   acknowledgements are suppressed for ground traffic and questions, so an ETA request waits for
   the player's actual reply.
+- Each spatial request tracks the hostile ground vehicle or vehicles that triggered it. When the
+  last tracked attacker is destroyed, the active secondary clears immediately and the requesting
+  ground callsign reports the threat destroyed and thanks the player. If several attackers are
+  engaging the same group, destroying only one does not close the task. Unaccepted requests close
+  silently once their last tracked attacker is destroyed.
 - AWACS does not send automatic support updates. Ask for *"vector to Anvil"* (or another ground
   callsign), *"vector to last support request"*, or *"vector to secondary"* to get the requested
   group's current bearing/range. A plain *"request vector"* remains reserved for the selected or
@@ -602,8 +793,10 @@ voiced through the wingman channel, unless they are recognized as tower landing 
 At mission start only, RadioChatter keeps the takeoff exchange together: if wingman/in-game
 lines arrive while the player is still grounded at a friendly airbase and the tower takeoff
 clearance (or the player's readback) is still pending or playing, those lines are held until
-the `[PLAYER-TWR]` readback has finished. Non-urgent AWACS lines generated during that same
-startup gate are also held. A takeoff from a field puts the player under tower control, so
+the `[PLAYER-TWR]` readback has finished. Non-urgent AWACS lines and unsolicited ground-support
+hails generated during that same startup gate are also held. Ground incidents continue to be
+tracked, but their hails additionally require confirmed airborne state. A takeoff from a field
+puts the player under tower control, so
 AWACS stays silent through the takeoff roll and climb-out until tower hands the player off with
 the airborne *"contact {awacs}"* call (and that exchange has finished playing). The intended
 first-airfield sequence is tower clearance, player readback, startup mission/wingman comms,

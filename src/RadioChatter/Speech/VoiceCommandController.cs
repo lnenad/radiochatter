@@ -240,7 +240,10 @@ namespace RadioChatter.Speech
                    "Request landing clearance. Inbound. " +
                    "Request picture. Bogey dope. Request vector to target. " +
                    "Vector to objective. Request objective list. " +
-                   "Vector to home plate. Return to base. Radio check. Radio quiet. Resume calls. " +
+                   "Vector to home plate. Return to base. Radio check. Winchester. Radio quiet. Resume calls. " +
+                   "Checking in, CAP as fragged. Checking in as close air support. " +
+                   "Checking in, SEAD as fragged. Checking in, strike as fragged. " +
+                   "Mission search and destroy. Mission general. " +
                    "Hammer four unable. Negative Anvil one. Unable to assist Ranger two. " +
                    _config.AwacsCallsign.Value + ", " + _config.PlayerCallsign.Value + ", airborne, checking in.";
 

@@ -31,6 +31,7 @@ namespace RadioChatter.Game
             FillFriendlyAirbases(snapshot, localHq);
             FillUnits(snapshot, localHq);
             FillContacts(snapshot, localHq);
+            FillRadarEmitters(snapshot, localHq);
             FillSelectedTarget(snapshot, aircraft);
             FillMissileThreats(snapshot, aircraft);
             FillObjectives(snapshot, localHq, aircraft);
@@ -164,10 +165,6 @@ namespace RadioChatter.Game
             bool destroyed = false;
             try { destroyed = aircraft.disabled || aircraft.unitState == global::Unit.UnitState.Destroyed; } catch { }
 
-            bool weaponAmmoKnown;
-            bool hasUsableWeapons;
-            ReadOffensiveWeaponState(aircraft, out weaponAmmoKnown, out hasUsableWeapons);
-
             snapshot.Player = new PlayerState
             {
                 Valid = true,
@@ -184,56 +181,9 @@ namespace RadioChatter.Game
                 GearDown = aircraft.gearDeployed,
                 Grounded = landed || (aircraft.gearDeployed && aircraft.radarAlt < 2f && aircraft.speed < 45f),
                 FuelFraction = SafeFuelLevel(aircraft),
-                WeaponAmmoKnown = weaponAmmoKnown,
-                HasUsableWeapons = hasUsableWeapons,
                 Ejected = aircraft.HasEjected(),
                 Destroyed = destroyed
             };
-        }
-
-        /// <summary>Reads live station counts so Winchester is detected even if weapons were
-        /// already expended before the mod observed their fire events. Utility and cargo
-        /// stations do not keep the aircraft in a combat-capable state.</summary>
-        private static void ReadOffensiveWeaponState(
-            global::Aircraft aircraft,
-            out bool known,
-            out bool hasUsableWeapons)
-        {
-            known = false;
-            hasUsableWeapons = false;
-
-            try
-            {
-                if (aircraft.weaponStations == null)
-                    return;
-
-                for (int i = 0; i < aircraft.weaponStations.Count; i++)
-                {
-                    global::WeaponStation station = aircraft.weaponStations[i];
-                    global::WeaponInfo info = station != null ? station.WeaponInfo : null;
-                    if (info == null || !IsOffensiveWeapon(info))
-                        continue;
-
-                    known = true;
-                    if (station.Ammo > 0)
-                    {
-                        hasUsableWeapons = true;
-                        return;
-                    }
-                }
-            }
-            catch
-            {
-                // Unknown loadouts must never silence AWACS.
-                known = false;
-                hasUsableWeapons = false;
-            }
-        }
-
-        private static bool IsOffensiveWeapon(global::WeaponInfo info)
-        {
-            return info.gun || info.missile || info.bomb || info.nuclear || info.energy ||
-                   info.blastDamage > 0f || info.pierceDamage > 0f;
         }
 
         private static void FillFriendlyAirbases(Snapshot snapshot, global::FactionHQ localHq)
@@ -337,6 +287,38 @@ namespace RadioChatter.Game
                     continue;
 
                 snapshot.Contacts.Add(ContactFromUnit(unit, pair.Key.Id, ToGPos(tracking.GetPosition()), true, tracking.lastSpottedTime));
+            }
+        }
+
+        private static void FillRadarEmitters(Snapshot snapshot, global::FactionHQ localHq)
+        {
+            if (localHq == null || global::UnitRegistry.allUnits == null)
+                return;
+
+            foreach (global::Unit unit in global::UnitRegistry.allUnits)
+            {
+                if (unit == null || unit.disabled || unit.NetworkHQ == null || unit.NetworkHQ == localHq ||
+                    unit is global::Aircraft || unit is global::Missile)
+                {
+                    continue;
+                }
+
+                try
+                {
+                    if (!unit.HasRadarEmission())
+                        continue;
+
+                    snapshot.RadarEmitters.Add(new RadarEmitterInfo
+                    {
+                        Id = PersistentId(unit),
+                        DisplayName = RadioName(unit),
+                        Position = PositionOf(unit)
+                    });
+                }
+                catch
+                {
+                    // Individual units may disappear while the registry is being enumerated.
+                }
             }
         }
 

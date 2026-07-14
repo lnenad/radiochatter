@@ -27,6 +27,29 @@ internal static class Program
         Assert(!VoiceIntentParser.IsGroundSupportDecline("Overwatch, Broadsword one one, request picture"),
             "existing AWACS command is not a decline");
 
+        var supportThreats = new GroundSupportThreatTracker();
+        supportThreats.Track(101);
+        supportThreats.Track(102);
+        Assert(!supportThreats.MarkDestroyed(101) && supportThreats.Count == 1,
+            "destroying one of two ground attackers keeps the support task active");
+        Assert(supportThreats.MarkDestroyed(102) && supportThreats.Count == 0,
+            "destroying the last tracked ground attacker completes the support task");
+        Assert(!supportThreats.MarkDestroyed(999),
+            "an unrelated destroyed unit cannot complete a support task");
+        supportThreats.Restart(201);
+        Assert(supportThreats.Count == 1 && supportThreats.MarkDestroyed(201),
+            "a new engagement replaces stale attacker tracking for the persistent group");
+        Assert(GroundSupportHailGate.ShouldHold(true, true, false),
+            "ground support hails stay muted while the player is on the ground");
+        Assert(GroundSupportHailGate.ShouldHold(null, false, false),
+            "ground support hails wait for a stable airborne determination");
+        Assert(GroundSupportHailGate.ShouldHold(false, false, true),
+            "ground support hails stay behind the AWACS startup gate after liftoff");
+        Assert(!GroundSupportHailGate.ShouldHold(false, false, false),
+            "ground support hails release only after confirmed airborne state and AWACS startup release");
+        Assert(Math.Abs(GroundSupportHailGate.NextAllowedAt(100f) - 120f) < 0.001f,
+            "ground support hail filter blocks all further requests for twenty seconds");
+
         VoiceIntent existing = VoiceIntentParser.Parse(
             "Overwatch, Falcon one one, request picture", "Overwatch", "Falcon 1-1");
         Assert(existing.Kind == VoiceIntentKind.RequestPicture, "existing picture intent remains intact");
@@ -53,6 +76,81 @@ internal static class Program
             "Overwatch, Broadsword one one, stop AWACS calls", "Overwatch", "Broadsword 1-1");
         Assert(stopAwacsCalls.Kind == VoiceIntentKind.RequestAwacsQuiet,
             "broader stop-AWACS wording also selects quiet mode");
+
+        VoiceIntent terseWinchester = VoiceIntentParser.Parse(
+            "Winchester to AWACS", "Overwatch", "Broadsword 1-1");
+        Assert(terseWinchester.Kind == VoiceIntentKind.DeclareWinchester,
+            "terse Winchester-to-AWACS wording declares weapons depleted");
+        Assert(terseWinchester.Station == VoiceStation.Awacs && terseWinchester.Callsign.Length == 0,
+            "terse Winchester declaration routes to AWACS without treating Winchester as a callsign");
+        VoiceIntent formalWinchester = VoiceIntentParser.Parse(
+            "Overwatch, Broadsword one one, Winchester", "Overwatch", "Broadsword 1-1");
+        Assert(formalWinchester.Kind == VoiceIntentKind.DeclareWinchester &&
+               formalWinchester.StationAddressed && formalWinchester.CallsignSpoken,
+            "formal Winchester declaration retains proper AWACS address and callsign");
+
+        VoiceIntent seadCheckIn = VoiceIntentParser.Parse(
+            "Overwatch, Broadsword one one, checking in, SEAD as fragged", "Overwatch", "Broadsword 1-1");
+        Assert(seadCheckIn.Kind == VoiceIntentKind.SetMissionRole &&
+               seadCheckIn.MissionRole == FlightMissionRole.Sead,
+            "SEAD mission check-in selects the SEAD role");
+        Assert(seadCheckIn.Callsign == "Broadsword 1-1" && seadCheckIn.StationAddressed,
+            "mission check-in retains proper station and callsign format");
+
+        VoiceIntent capCheckIn = VoiceIntentParser.Parse(
+            "Overwatch, Broadsword one one, checking in as CAP", "Overwatch", "Broadsword 1-1");
+        Assert(capCheckIn.Kind == VoiceIntentKind.SetMissionRole &&
+               capCheckIn.MissionRole == FlightMissionRole.Cap,
+            "CAP mission check-in selects the CAP role");
+
+        VoiceIntent casCheckIn = VoiceIntentParser.Parse(
+            "Overwatch, Broadsword one one, mission C A S", "Overwatch", "Broadsword 1-1");
+        Assert(casCheckIn.Kind == VoiceIntentKind.SetMissionRole &&
+               casCheckIn.MissionRole == FlightMissionRole.Cas,
+            "spoken-letter CAS mission selects the CAS role");
+
+        VoiceIntent strikeCheckIn = VoiceIntentParser.Parse(
+            "Overwatch, Broadsword one one, strike as fragged", "Overwatch", "Broadsword 1-1");
+        Assert(strikeCheckIn.Kind == VoiceIntentKind.SetMissionRole &&
+               strikeCheckIn.MissionRole == FlightMissionRole.Strike,
+            "strike as fragged selects the strike role");
+
+        VoiceIntent searchAndDestroyMission = VoiceIntentParser.Parse(
+            "mission search and destroy", "Overwatch", "Broadsword 1-1");
+        Assert(searchAndDestroyMission.Kind == VoiceIntentKind.SetMissionRole &&
+               searchAndDestroyMission.MissionRole == FlightMissionRole.SearchAndDestroy,
+            "terse mission search and destroy selects the search-and-destroy role");
+        Assert(VoiceIntentParser.ContainsMissionCommandWord("mission search and destroy"),
+            "terse mission role wording is recognized as an explicit cockpit command");
+
+        VoiceIntent generalMission = VoiceIntentParser.Parse(
+            "Overwatch, Broadsword one one, mission general", "Overwatch", "Broadsword 1-1");
+        Assert(generalMission.Kind == VoiceIntentKind.SetMissionRole &&
+               generalMission.MissionRole == FlightMissionRole.None,
+            "mission general clears role filtering");
+
+        VoiceIntent plainCheckIn = VoiceIntentParser.Parse(
+            "Overwatch, Broadsword one one, checking in", "Overwatch", "Broadsword 1-1");
+        Assert(plainCheckIn.Kind == VoiceIntentKind.CheckIn,
+            "check-in without a mission preserves the existing all-chatter behavior");
+        Assert(FlightMissionRolePolicy.SuppressGroundSupportHails(FlightMissionRole.Cap) &&
+               !FlightMissionRolePolicy.SuppressAutomaticAirContacts(FlightMissionRole.Cap),
+            "CAP keeps air contacts and suppresses ground hails");
+        Assert(!FlightMissionRolePolicy.SuppressGroundSupportHails(FlightMissionRole.Cas) &&
+               FlightMissionRolePolicy.SuppressAutomaticAirContacts(FlightMissionRole.Cas),
+            "CAS keeps ground hails and suppresses air contacts");
+        Assert(FlightMissionRolePolicy.SuppressGroundSupportHails(FlightMissionRole.Sead) &&
+               FlightMissionRolePolicy.SuppressAutomaticAirContacts(FlightMissionRole.Sead),
+            "SEAD suppresses both generic chatter streams");
+        Assert(FlightMissionRolePolicy.SuppressGroundSupportHails(FlightMissionRole.Strike) &&
+               !FlightMissionRolePolicy.SuppressAutomaticAirContacts(FlightMissionRole.Strike),
+            "strike suppresses ground hails and retains air contacts");
+        Assert(FlightMissionRolePolicy.SuppressGroundSupportHails(FlightMissionRole.SearchAndDestroy) &&
+               !FlightMissionRolePolicy.SuppressAutomaticAirContacts(FlightMissionRole.SearchAndDestroy),
+            "search and destroy uses strike-like chatter filtering");
+        Assert(!FlightMissionRolePolicy.SuppressGroundSupportHails(FlightMissionRole.None) &&
+               !FlightMissionRolePolicy.SuppressAutomaticAirContacts(FlightMissionRole.None),
+            "no mission role preserves all chatter");
 
         VoiceIntent plainVector = VoiceIntentParser.Parse(
             "Overwatch, Broadsword one one, request vector", "Overwatch", "Broadsword 1-1");

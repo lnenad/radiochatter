@@ -120,7 +120,6 @@ namespace RadioChatter
         public readonly ConfigEntry<bool> GroundSupportRequests;
         public readonly ConfigEntry<float> GroundSupportGroupRadiusM;
         public readonly ConfigEntry<float> GroundSupportRepeatSeconds;
-        public readonly ConfigEntry<bool> QuietAwacsWhenWinchester;
 
         // Voice commands
         public readonly ConfigEntry<bool> VoiceCommandsEnabled;
@@ -203,8 +202,6 @@ namespace RadioChatter
                 new ConfigDescription(
                     "Seconds between repeated hails from a ground group whose request has not been accepted.",
                     new AcceptableValueRange<float>(60f, 300f)));
-            QuietAwacsWhenWinchester = f.Bind("Callouts", "QuietAwacsWhenWinchester", true,
-                "Suppress automatic new-contact, picture, target-vector, and periodic RTB-vector calls after all offensive weapons are expended. Returning to base is never inferred; use the radio-quiet voice command when desired. Requested AWACS replies and urgent calls remain available.");
 
             VoiceCommandsEnabled = f.Bind("VoiceCommands", "Enabled", true,
                 "Push-to-talk voice commands: request takeoff/landing clearance, AWACS picture, vectors, radio quiet/resume, and radio checks. Needs a microphone; speech is transcribed locally by the sidecar.");

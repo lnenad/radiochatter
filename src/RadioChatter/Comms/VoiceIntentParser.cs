@@ -3,6 +3,33 @@ using System.Text;
 
 namespace RadioChatter.Comms
 {
+    internal enum FlightMissionRole
+    {
+        None,
+        Cap,
+        Cas,
+        Sead,
+        Strike,
+        SearchAndDestroy
+    }
+
+    internal static class FlightMissionRolePolicy
+    {
+        public static bool SuppressGroundSupportHails(FlightMissionRole role)
+        {
+            return role == FlightMissionRole.Cap ||
+                   role == FlightMissionRole.Sead ||
+                   role == FlightMissionRole.Strike ||
+                   role == FlightMissionRole.SearchAndDestroy;
+        }
+
+        public static bool SuppressAutomaticAirContacts(FlightMissionRole role)
+        {
+            return role == FlightMissionRole.Cas ||
+                   role == FlightMissionRole.Sead;
+        }
+    }
+
     internal enum VoiceIntentKind
     {
         Unknown,
@@ -14,8 +41,10 @@ namespace RadioChatter.Comms
         RequestVectorObjective,
         RequestObjectiveList,
         RequestVectorHome,
+        DeclareWinchester,
         RequestAwacsQuiet,
         RequestAwacsResume,
+        SetMissionRole,
         CheckIn,
         RadioCheck
     }
@@ -43,6 +72,8 @@ namespace RadioChatter.Comms
         /// <summary>Free-form words spoken after "objective", used to pick a specific objective
         /// by loose name match ("vector to objective radar site"). Empty = closest objective.</summary>
         public string ObjectiveQuery;
+        /// <summary>Explicit mission role declared during an AWACS check-in or role update.</summary>
+        public FlightMissionRole MissionRole;
     }
 
     /// <summary>Deterministic transcript-to-intent matcher. The command set is a small closed
@@ -65,6 +96,9 @@ namespace RadioChatter.Comms
             "quiet", "silence", "silent", "stop", "hold", "go", "cancel", "terminate", "minimize", "minimise",
             "resume", "restore", "normal", "emergency", "essential",
             "call", "calls", "callout", "callouts", "traffic",
+            "winchester", "weapons", "ordnance", "ordinance", "dry",
+            "mission", "role", "tasked", "tasking", "as", "fragged", "cap", "cas", "sead", "seed",
+            "strike", "search", "destroy", "general", "multirole", "multi",
             "say", "need", "want", "give", "what", "on", "for", "with", "at", "to"
         };
 
@@ -97,6 +131,8 @@ namespace RadioChatter.Comms
             intent.ObjectiveQuery = intent.Kind == VoiceIntentKind.RequestVectorObjective
                 ? ExtractObjectiveQuery(tokens)
                 : string.Empty;
+            if (intent.Kind == VoiceIntentKind.SetMissionRole)
+                TryDetectMissionRole(text, out intent.MissionRole);
 
             return intent;
         }
@@ -111,6 +147,14 @@ namespace RadioChatter.Comms
                 "unable", "negative", "decline", "declining",
                 "cannot assist", "cant assist", "cannot help", "cant help",
                 "not able", "not available", "no can do");
+        }
+
+        /// <summary>True when the player explicitly uses "mission" as a cockpit mode command.
+        /// This permits terse selections such as "mission search and destroy" while leaving
+        /// ordinary AWACS requests subject to configured radio-discipline checks.</summary>
+        public static bool ContainsMissionCommandWord(string transcript)
+        {
+            return IndexOfWord(Normalize(transcript), "mission") >= 0;
         }
 
         /// <summary>Station address at the very start of the utterance: "tower ...",
@@ -395,6 +439,10 @@ namespace RadioChatter.Comms
             if (text.Length == 0)
                 return VoiceIntentKind.Unknown;
 
+            FlightMissionRole ignoredRole;
+            if (TryDetectMissionRole(text, out ignoredRole))
+                return VoiceIntentKind.SetMissionRole;
+
             // Restore phrases must win over quiet phrases because "cancel radio quiet"
             // intentionally contains the word "quiet".
             if (HasAny(text,
@@ -403,6 +451,13 @@ namespace RadioChatter.Comms
                 "cancel radio quiet", "cancel quiet comms", "terminate radio quiet"))
             {
                 return VoiceIntentKind.RequestAwacsResume;
+            }
+
+            if (HasAny(text,
+                "winchester", "win chester", "weapons dry", "out of weapons",
+                "no weapons remaining", "out of ordnance", "out of ordinance"))
+            {
+                return VoiceIntentKind.DeclareWinchester;
             }
 
             if (HasAny(text,
@@ -455,6 +510,56 @@ namespace RadioChatter.Comms
                 return VoiceIntentKind.RequestPicture;
 
             return VoiceIntentKind.Unknown;
+        }
+
+        private static bool TryDetectMissionRole(string text, out FlightMissionRole role)
+        {
+            role = FlightMissionRole.None;
+            bool hasRoleContext = HasAny(text,
+                "check in", "checking in", "mission", "role", "tasked", "tasking", "as fragged");
+
+            if (HasAny(text, "no mission", "mission general", "general mission", "mission multirole",
+                "mission multi role", "cancel mission role", "clear mission role"))
+            {
+                role = FlightMissionRole.None;
+                return true;
+            }
+
+            if (!hasRoleContext)
+                return false;
+
+            if (HasAny(text, "sead", "s e a d", "seed", "suppression of enemy air defenses",
+                "suppression of enemy air defence"))
+            {
+                role = FlightMissionRole.Sead;
+                return true;
+            }
+
+            if (HasAny(text, "cas", "c a s", "close air support"))
+            {
+                role = FlightMissionRole.Cas;
+                return true;
+            }
+
+            if (HasAny(text, "cap", "c a p", "combat air patrol"))
+            {
+                role = FlightMissionRole.Cap;
+                return true;
+            }
+
+            if (HasAny(text, "search and destroy", "search destroy", "seek and destroy"))
+            {
+                role = FlightMissionRole.SearchAndDestroy;
+                return true;
+            }
+
+            if (HasAny(text, "strike", "interdiction"))
+            {
+                role = FlightMissionRole.Strike;
+                return true;
+            }
+
+            return false;
         }
 
         private static VoiceStation DetectStation(string text, string awacsCallsign)
