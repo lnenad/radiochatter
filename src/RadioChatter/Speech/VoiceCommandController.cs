@@ -237,12 +237,17 @@ namespace RadioChatter.Speech
                    _config.PlayerCallsign.Value + ". " +
                    _config.AwacsCallsign.Value + ". " +
                    "Tower, this is " + _config.PlayerCallsign.Value + ", requesting takeoff. " +
+                   "Deck control, this is " + _config.PlayerCallsign.Value + ", request launch. " +
                    "Request landing clearance. Inbound. " +
+                   "Carrier, this is " + _config.PlayerCallsign.Value + ", request recovery. " +
                    "Request picture. Bogey dope. Request vector to target. " +
                    "Vector to objective. Request objective list. " +
-                   "Vector to home plate. Return to base. Radio check. Winchester. Radio quiet. Resume calls. " +
+                   "Vector to home plate. Return to base. Radio check. Say again. Please repeat. Repeat your last. " +
+                   "Winchester. Radio quiet. Resume calls. " +
                    "Checking in, CAP as fragged. Checking in as close air support. " +
                    "Checking in, SEAD as fragged. Checking in, strike as fragged. " +
+                   "Checking in, air interdiction as fragged. Mission bombing. " +
+                   "Checking in, maritime strike as fragged. Mission anti surface warfare. " +
                    "Mission search and destroy. Mission general. " +
                    "Hammer four unable. Negative Anvil one. Unable to assist Ranger two. " +
                    _config.AwacsCallsign.Value + ", " + _config.PlayerCallsign.Value + ", airborne, checking in.";
@@ -251,6 +256,8 @@ namespace RadioChatter.Speech
             {
                 prompt += " Cleared for takeoff runway two seven, " + _config.PlayerCallsign.Value + "." +
                           " Cleared to land runway two seven, " + _config.PlayerCallsign.Value + "." +
+                          " Cleared for launch, " + _config.PlayerCallsign.Value + "." +
+                          " Cleared for recovery, " + _config.PlayerCallsign.Value + "." +
                           " Switching " + _config.AwacsCallsign.Value + ", " + _config.PlayerCallsign.Value + ".";
             }
 

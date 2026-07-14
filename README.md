@@ -177,6 +177,14 @@ Other valid role exchanges use the same explicit readback:
 [AWACS]   Broadsword 1-1, Overwatch, mission strike acknowledged, as fragged.
 [SYSTEM]  Strike: ground hails muted; automatic new-air-contact calls retained.
 
+[PLAYER]  Overwatch, Broadsword 1-1, bombing mission as fragged.
+[AWACS]   Broadsword 1-1, Overwatch, mission strike acknowledged, as fragged.
+[SYSTEM]  Bombing / air interdiction uses the Strike role.
+
+[PLAYER]  Overwatch, Broadsword 1-1, maritime strike as fragged.
+[AWACS]   Broadsword 1-1, Overwatch, mission maritime strike, anti-surface warfare acknowledged.
+[SYSTEM]  Maritime strike / ASuW: ground hails muted; defensive air-contact calls retained.
+
 [PLAYER]  Mission general.
 [AWACS]   Broadsword 1-1, Overwatch, general mission acknowledged. All traffic enabled.
 ```
@@ -188,6 +196,8 @@ Other valid role exchanges use the same explicit readback:
 **Tower**
 - Takeoff clearance, airborne handoff, inbound approach, landing clearance (read from the
   game's own UI message, including the runway number), and welcome-home calls.
+- Carrier airbases use deck-control launch, carrier departure, recovery, and welcome-aboard
+  phraseology without runway assignments; conventional airfields keep Tower/runway dialogue.
 
 **AWACS**
 - New-contact BRA calls for freshly detected enemy aircraft.
@@ -256,8 +266,10 @@ Other valid role exchanges use the same explicit readback:
   finished, a persistent highlighted subtitle shows the required report and an exact example;
   it clears when AWACS accepts the check-in. Urgent missile warnings still cut through.
 - Supported requests:
-  - *"...request takeoff"* → takeoff clearance (or *"unable"* away from the field).
-  - *"...request landing"* / *"inbound"* → landing clearance with runway, or *"continue inbound"*.
+  - *"...request takeoff"* / *"Deck control, ...request launch"* → takeoff or carrier launch
+    clearance (or *"unable"* away from the field).
+  - *"...request landing"* / *"Carrier, ...request recovery"* / *"inbound"* → landing clearance
+    with runway at an airfield, carrier recovery clearance at sea, or *"continue inbound"*.
   - *"...request picture"* / *"bogey dope"* → BRA on the nearest contact, or *"picture clean"*.
   - *"...request vector to target"* → vector to your sorted target or the nearest contact.
   - *"...request objectives"* / *"objective list"* → AWACS reads the active objectives by
@@ -278,8 +290,10 @@ Other valid role exchanges use the same explicit readback:
   - *"Overwatch, Falcon 1-1, checking in, SEAD as fragged"* → select SEAD for this aircraft.
     AWACS explicitly reads back the selected mission, then reports the nearest active hostile
     surface emitter by type, bearing, and range, or reports that the emitter picture is empty.
-  - Replace `SEAD` with `CAP`, `CAS` / `close air support`, `strike`, or `search and destroy` to
-    select another role. The terse command *"mission search and destroy"* also works without a
+  - Replace `SEAD` with `CAP`, `CAS` / `close air support`, `strike`, `air interdiction`,
+    `bombing mission`, `maritime strike`, `anti-ship`, `ASuW` / `anti-surface warfare`, or
+    `search and destroy` to select another role. The terse commands *"mission bombing"*,
+    *"mission anti-surface warfare"*, and *"mission search and destroy"* also work without a
     station/callsign preamble, even when proper calls are required. *"Mission general"* clears the
     role the same way. Later plain AWACS check-ins repeat any currently selected mission. A plain
     check-in with no prior selection preserves the current all-chatter behavior.
@@ -299,6 +313,9 @@ Other valid role exchanges use the same explicit readback:
     and ground-support vectors are never sent automatically.
   - *"...airborne, checking in"* / *"...with you"* → AWACS radar-contact acknowledgement.
   - *"...radio check"* → *"read you five by five"*.
+  - *"Darkstar, Broadsword 1-1, say again"* / *"please repeat"* / *"repeat your last"* →
+    the addressed Tower or AWACS station repeats its own most recent transmission. Asking Tower
+    to repeat a clearance does not count as a failed readback.
   - A proper call the controller cannot make out gets an in-character *"say again"*.
 - The recognized transcript is shown as a `[PILOT]` subtitle so you can see what was heard.
 
@@ -504,7 +521,7 @@ Same-channel chatter is serialized regardless of `MaxConcurrentTransmissions`.
 |---|---:|---|
 | `Enabled` | `true` | Push-to-talk voice commands (needs a microphone). |
 | `RequireProperCalls` | `true` | Require "station, callsign, request" format; malformed calls get a corrective reply. Off = station and callsign are optional. |
-| `RequireTowerReadbacks` | `false` | Replace automatic synthesized Tower readbacks with player-spoken readbacks. Takeoff/landing readbacks must repeat the clearance, callsign, and assigned runway; handoffs must repeat the switch/contact instruction, callsign, and handoff station. Tower allows two attempts, correcting an invalid attempt or prompting after 10 seconds of silence. After the second failure it cancels takeoff and says hold position, sends an arrival around, or reports an unconfirmed handoff/radio failure. Only applies while voice commands are enabled. |
+| `RequireTowerReadbacks` | `false` | Replace automatic synthesized Tower readbacks with player-spoken readbacks. Takeoff/landing readbacks must repeat the clearance, callsign, and any assigned runway; carrier launch/recovery clearances use no runway. Handoffs must repeat the switch/contact instruction, callsign, and handoff station. Tower allows two attempts, correcting an invalid attempt or prompting after 10 seconds of silence. After the second failure it cancels takeoff and says hold position, sends an arrival around, or reports an unconfirmed handoff/radio failure. Only applies while voice commands are enabled. |
 | `RequestDriven` | `true` | Pull, not push: tower clearances (takeoff, approach, landing) and AWACS picture/vector/RTB-advisory calls must be requested by voice. New contacts, missile warnings, splashes, and bingo fuel stay automatic. Off = everything is announced automatically, as before voice commands. Only applies while voice commands are enabled. |
 | `PushToTalkKey` | `RightAlt` | Hold to record a command, release to send. Any Unity `KeyCode` name works, including `Mouse3`/`Mouse4`. |
 | `MicrophoneDevice` | empty | Microphone device name; empty uses the system default. |
@@ -625,6 +642,8 @@ screen. Nothing is skipped or lost because of a pause.
 - Final landing clearance uses the game's own UI message, such as `Cleared to land runway 27`,
   instead of trying to infer final approach. Runway numbers are parsed from the UI message,
   including `runway 27L`, `runway 27 L`, and `RWY 27`.
+- A home airbase attached to a unit, or fitted with a ski jump or arrestor, is treated as an
+  aircraft carrier and substitutes launch/recovery calls for runway takeoff/landing calls.
 - Landing/welcome-home fires on successful sortie or stable landing near the friendly airbase.
 
 </details>
@@ -667,7 +686,12 @@ screen. Nothing is skipped or lost because of a pause.
   - `CAS`: ground-support hails retained; automatic new-air-contact calls muted.
   - `SEAD`: both generic streams muted; check-in reports the nearest currently emitting hostile
     surface radar with an arcade-readable bearing and range.
-  - `Strike`: ground-support hails muted; automatic new-air-contact calls retained.
+  - `Strike` / `air interdiction` / `bombing mission`: ground-support hails muted; automatic
+    new-air-contact calls retained. Air interdiction is the doctrinal term for attacks on enemy
+    military potential away from the close coordination required for CAS ([USAF AFDP 3-03](https://www.doctrine.af.mil/Portals/61/documents/AFDP_3-03/3-03-D03-AIFundamentals.pdf)).
+  - `Maritime strike` / `anti-ship` / `ASuW`: ship-attack tasking with strike-like filtering;
+    ground-support hails are muted and defensive air-contact calls retained. `ASuW` means
+    anti-surface warfare; `war-at-sea strike` is also accepted ([US Navy/NAVAIR](https://www.navair.navy.mil/lrasm)).
   - `Search and destroy`: strike-like filtering; ground-support hails muted and automatic
     new-air-contact calls retained.
   - No role / `mission general`: all chatter retained as before.
@@ -691,9 +715,9 @@ screen. Nothing is skipped or lost because of a pause.
   remain silent until the player is confirmed airborne and the Tower-to-AWACS startup gate has
   cleared. Pending groups become immediately eligible at release; they do not wait through a full
   repeat interval. Landing mutes new hails again until the next takeoff.
-- Unsolicited hails are held while the player is checked in as CAP, SEAD, strike, or search and
-  destroy. The request remains spatially grouped and can be heard later if the player switches to
-  CAS or clears the role.
+- Unsolicited hails are held while the player is checked in as CAP, SEAD, strike/air interdiction,
+  maritime strike/ASuW, or search and destroy. The request remains spatially grouped and can be
+  heard later if the player switches to CAS or clears the role.
 - Pilot-declared Winchester also holds new and repeated hails. The incidents and their attackers
   continue tracking silently; *"resume calls"* makes valid pending groups immediately eligible
   again. AWACS-only *"radio quiet"* does not suppress ground hails.
@@ -1083,6 +1107,8 @@ their sizes and SHA-256 hashes, and excludes unrelated user cache data and downl
 - Start sidecar and verify `/health`.
 - Launch a mission from a friendly airbase.
 - Confirm takeoff clearance on ramp/start.
+- Launch from a carrier and confirm deck-control launch, carrier departure, recovery, and
+  welcome-aboard calls replace runway/Tower wording.
 - Take off and confirm airborne handoff.
 - Spawn or approach detected enemies and confirm one new-contact call per observed enemy
   aircraft.
@@ -1109,6 +1135,8 @@ their sizes and SHA-256 hashes, and excludes unrelated user cache data and downl
 - Return to base from more than 18 km out and confirm the RTB vector call after sustained
   inbound flight.
 - Drop below bingo fuel and confirm one AWACS RTB fuel advisory.
+- Check in with *"bombing mission"* / *"air interdiction"* and *"maritime strike"* /
+  *"anti-surface warfare"*; confirm AWACS reads back Strike and Maritime Strike respectively.
 - Wait for the game's `Cleared to land runway ...` UI message and confirm the tower reads the
   runway from it.
 - Land successfully and confirm welcome-home call.

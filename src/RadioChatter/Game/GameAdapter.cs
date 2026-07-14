@@ -1,4 +1,5 @@
 using System;
+using RadioChatter.Comms;
 using UnityEngine;
 
 namespace RadioChatter.Game
@@ -198,13 +199,27 @@ namespace RadioChatter.Game
 
                 float runwayHeading = float.NaN;
                 string runwayName = null;
+                bool hasSkiJump = false;
+                bool hasArrestor = false;
 
-                if (airbase.runways != null && airbase.runways.Length > 0 && airbase.runways[0] != null)
+                if (airbase.runways != null)
                 {
-                    global::Airbase.Runway runway = airbase.runways[0];
-                    Vector3 dir = runway.GetDirection(false);
-                    runwayHeading = NormalizeHeading(Mathf.Atan2(dir.x, dir.z) * Mathf.Rad2Deg);
-                    runwayName = runway.GetName(false);
+                    for (int i = 0; i < airbase.runways.Length; i++)
+                    {
+                        global::Airbase.Runway runway = airbase.runways[i];
+                        if (runway == null)
+                            continue;
+
+                        hasSkiJump |= runway.SkiJump;
+                        hasArrestor |= runway.Arrestor;
+
+                        if (float.IsNaN(runwayHeading))
+                        {
+                            Vector3 dir = runway.GetDirection(false);
+                            runwayHeading = NormalizeHeading(Mathf.Atan2(dir.x, dir.z) * Mathf.Rad2Deg);
+                            runwayName = runway.GetName(false);
+                        }
+                    }
                 }
 
                 Transform center = airbase.center != null ? airbase.center : airbase.transform;
@@ -214,6 +229,7 @@ namespace RadioChatter.Game
                     Name = !string.IsNullOrEmpty(airbase.name) ? airbase.name : "Airbase",
                     Position = ToGPos(global::GlobalPositionExtensions.GlobalPosition(center)),
                     RadiusM = airbase.GetRadius(),
+                    IsCarrier = CarrierCommsPolicy.IsCarrierAirbase(airbase.AttachedAirbase, hasSkiJump, hasArrestor),
                     RunwayHeadingDeg = runwayHeading,
                     RunwayName = runwayName
                 });

@@ -49,6 +49,94 @@ internal static class Program
             "ground support hails release only after confirmed airborne state and AWACS startup release");
         Assert(Math.Abs(GroundSupportHailGate.NextAllowedAt(100f) - 120f) < 0.001f,
             "ground support hail filter blocks all further requests for twenty seconds");
+        var supportPlaybackGate = new GroundSupportPlaybackGate();
+        Assert(supportPlaybackGate.CanStart(100f),
+            "the first ground support hail may begin playback immediately");
+        supportPlaybackGate.MarkStarted(100f);
+        Assert(!supportPlaybackGate.CanStart(119.999f),
+            "a second audible ground support hail stays blocked inside the twenty-second window");
+        Assert(supportPlaybackGate.CanStart(120f),
+            "a second audible ground support hail releases at the twenty-second boundary");
+        supportPlaybackGate.MarkStarted(125f);
+        Assert(!supportPlaybackGate.CanStart(144.999f) && supportPlaybackGate.CanStart(145f),
+            "the audible cooldown follows the actual playback start rather than an earlier dispatch");
+        Assert(!AircraftSessionPolicy.ShouldResetFromHudEvent(42, 42, 42),
+            "rebinding the HUD to the same aircraft preserves Winchester and other cockpit state");
+        Assert(!AircraftSessionPolicy.ShouldResetFromHudEvent(42, 0, 42),
+            "a transient HUD aircraft clear does not reset cockpit state");
+        Assert(!AircraftSessionPolicy.ShouldResetFromHudEvent(42, 99, 42),
+            "a stale HUD aircraft event cannot override the authoritative snapshot");
+        Assert(AircraftSessionPolicy.ShouldResetFromHudEvent(42, 99, 99),
+            "a snapshot-confirmed new airframe resets aircraft-specific cockpit state");
+        Assert(FlightExitPolicy.IsNormalAirportExit(true, true, false, false),
+            "a successful sortie remains a normal exit when the parked aircraft is disabled during despawn");
+        Assert(FlightExitPolicy.IsNormalAirportExit(false, false, true, true),
+            "a grounded aircraft near its airbase is also a normal exit before the sortie event arrives");
+        Assert(!FlightExitPolicy.IsNormalAirportExit(false, true, true, true),
+            "a destroyed aircraft without a successful sortie still produces an ejection mayday");
+        Assert(!FlightExitPolicy.IsNormalAirportExit(false, false, false, true),
+            "an airborne exit without a successful sortie is not classified as a normal airport exit");
+        float retryAwaitingSince = 100f;
+        retryAwaitingSince = TowerReadbackTiming.RefreshAwaitingSince(retryAwaitingSince, 109f, true);
+        Assert(Math.Abs(retryAwaitingSince - 109f) < 0.001f,
+            "Tower correction audio refreshes the retry response window");
+        Assert(!TowerReadbackTiming.HasTimedOut(retryAwaitingSince, 118.999f, 10f),
+            "the corrected readback remains eligible for the full response window after Tower finishes");
+        Assert(TowerReadbackTiming.HasTimedOut(retryAwaitingSince, 119f, 10f),
+            "a missing corrected readback times out only after the refreshed response window");
+        Assert(!CarrierCommsPolicy.IsCarrierAirbase(false, false, false),
+            "a conventional fixed airbase keeps runway and Tower phraseology");
+        Assert(CarrierCommsPolicy.IsCarrierAirbase(true, false, false) &&
+               CarrierCommsPolicy.IsCarrierAirbase(false, true, false) &&
+               CarrierCommsPolicy.IsCarrierAirbase(false, false, true),
+            "attached airbases, ski jumps, and arrestors each identify carrier operations");
+        Assert(CarrierCommsPolicy.TakeoffPhraseKey(true) == "carrier_launch" &&
+               CarrierCommsPolicy.FinalPhraseKey(true) == "carrier_recovery" &&
+               CarrierCommsPolicy.TakeoffPhraseKey(false) == "tower_takeoff",
+            "carrier and land-base phrase routing remain distinct");
+        Assert(TowerReadbackMatcher.TryCreate(
+                   "Broadsword 1-1, deck control, cleared for launch", out TowerReadbackExpectation launchExpectation) &&
+               launchExpectation.Kind == TowerReadbackKind.Takeoff &&
+               TowerReadbackMatcher.IsMatch("cleared for launch, Broadsword one one", launchExpectation),
+            "a carrier launch clearance accepts a launch readback without a runway");
+        Assert(TowerReadbackMatcher.TryCreate(
+                   "Broadsword 1-1, carrier, cleared for recovery", out TowerReadbackExpectation recoveryExpectation) &&
+               recoveryExpectation.Kind == TowerReadbackKind.Landing &&
+               TowerReadbackMatcher.IsMatch("cleared to recover, Broadsword one one", recoveryExpectation),
+            "a carrier recovery clearance accepts recovery phraseology without a runway");
+        VoiceIntent deckLaunch = VoiceIntentParser.Parse(
+            "Deck control, Broadsword one one, request launch", "Darkstar", "Broadsword 1-1");
+        Assert(deckLaunch.Kind == VoiceIntentKind.RequestTakeoff &&
+               deckLaunch.Station == VoiceStation.Tower && deckLaunch.StationAddressed && deckLaunch.CallsignSpoken,
+            "deck-control launch requests route through the Tower command channel");
+        VoiceIntent carrierRecovery = VoiceIntentParser.Parse(
+            "Carrier, Broadsword one one, request recovery", "Darkstar", "Broadsword 1-1");
+        Assert(carrierRecovery.Kind == VoiceIntentKind.RequestLanding &&
+               carrierRecovery.Station == VoiceStation.Tower && carrierRecovery.StationAddressed,
+            "carrier recovery requests route through the Tower command channel");
+        VoiceIntent awacsSayAgain = VoiceIntentParser.Parse(
+            "Darkstar, this is Broadsword one one, say again", "Darkstar", "Broadsword 1-1");
+        Assert(awacsSayAgain.Kind == VoiceIntentKind.RequestRepeatLast &&
+               awacsSayAgain.Station == VoiceStation.Awacs && awacsSayAgain.CallsignSpoken,
+            "a properly addressed AWACS say-again request selects station replay");
+        VoiceIntent towerPleaseRepeat = VoiceIntentParser.Parse(
+            "Tower, Broadsword one one, please repeat", "Darkstar", "Broadsword 1-1");
+        Assert(towerPleaseRepeat.Kind == VoiceIntentKind.RequestRepeatLast &&
+               towerPleaseRepeat.Station == VoiceStation.Tower,
+            "please-repeat wording selects the addressed Tower history");
+        VoiceIntent repeatYourLast = VoiceIntentParser.Parse(
+            "Darkstar, Broadsword one one, repeat your last", "Darkstar", "Broadsword 1-1");
+        Assert(repeatYourLast.Kind == VoiceIntentKind.RequestRepeatLast,
+            "repeat-your-last wording selects station replay");
+        var stationHistory = new StationTransmissionHistory();
+        stationHistory.Record(VoiceStation.Tower, "Broadsword 1-1, cleared for takeoff runway three right");
+        stationHistory.Record(VoiceStation.Awacs, "Broadsword 1-1, Darkstar, picture clean");
+        Assert(stationHistory.TryGet(VoiceStation.Tower, out string lastTower) &&
+               lastTower.IndexOf("cleared for takeoff", StringComparison.Ordinal) >= 0,
+            "Tower repeat history remains independent from AWACS");
+        Assert(stationHistory.TryGet(VoiceStation.Awacs, out string lastAwacs) &&
+               lastAwacs.IndexOf("picture clean", StringComparison.Ordinal) >= 0,
+            "AWACS repeat history returns that station's last transmission");
 
         VoiceIntent existing = VoiceIntentParser.Parse(
             "Overwatch, Falcon one one, request picture", "Overwatch", "Falcon 1-1");
@@ -115,6 +203,31 @@ internal static class Program
                strikeCheckIn.MissionRole == FlightMissionRole.Strike,
             "strike as fragged selects the strike role");
 
+        VoiceIntent bombingMission = VoiceIntentParser.Parse(
+            "Overwatch, Broadsword one one, checking in, bombing mission", "Overwatch", "Broadsword 1-1");
+        Assert(bombingMission.Kind == VoiceIntentKind.SetMissionRole &&
+               bombingMission.MissionRole == FlightMissionRole.Strike && bombingMission.CallsignSpoken,
+            "bombing mission is accepted as the strike/air-interdiction role without corrupting the callsign");
+
+        VoiceIntent airInterdictionMission = VoiceIntentParser.Parse(
+            "mission air interdiction", "Overwatch", "Broadsword 1-1");
+        Assert(airInterdictionMission.Kind == VoiceIntentKind.SetMissionRole &&
+               airInterdictionMission.MissionRole == FlightMissionRole.Strike,
+            "air interdiction is accepted as doctrinal strike tasking");
+
+        VoiceIntent maritimeStrikeMission = VoiceIntentParser.Parse(
+            "Overwatch, Broadsword one one, maritime strike as fragged", "Overwatch", "Broadsword 1-1");
+        Assert(maritimeStrikeMission.Kind == VoiceIntentKind.SetMissionRole &&
+               maritimeStrikeMission.MissionRole == FlightMissionRole.MaritimeStrike &&
+               maritimeStrikeMission.CallsignSpoken,
+            "maritime strike selects the ship-attack role without corrupting the callsign");
+
+        VoiceIntent antiSurfaceMission = VoiceIntentParser.Parse(
+            "mission anti surface warfare", "Overwatch", "Broadsword 1-1");
+        Assert(antiSurfaceMission.Kind == VoiceIntentKind.SetMissionRole &&
+               antiSurfaceMission.MissionRole == FlightMissionRole.MaritimeStrike,
+            "anti-surface warfare is accepted as a maritime-strike alias");
+
         VoiceIntent searchAndDestroyMission = VoiceIntentParser.Parse(
             "mission search and destroy", "Overwatch", "Broadsword 1-1");
         Assert(searchAndDestroyMission.Kind == VoiceIntentKind.SetMissionRole &&
@@ -145,6 +258,9 @@ internal static class Program
         Assert(FlightMissionRolePolicy.SuppressGroundSupportHails(FlightMissionRole.Strike) &&
                !FlightMissionRolePolicy.SuppressAutomaticAirContacts(FlightMissionRole.Strike),
             "strike suppresses ground hails and retains air contacts");
+        Assert(FlightMissionRolePolicy.SuppressGroundSupportHails(FlightMissionRole.MaritimeStrike) &&
+               !FlightMissionRolePolicy.SuppressAutomaticAirContacts(FlightMissionRole.MaritimeStrike),
+            "maritime strike suppresses ground hails and retains defensive air contacts");
         Assert(FlightMissionRolePolicy.SuppressGroundSupportHails(FlightMissionRole.SearchAndDestroy) &&
                !FlightMissionRolePolicy.SuppressAutomaticAirContacts(FlightMissionRole.SearchAndDestroy),
             "search and destroy uses strike-like chatter filtering");

@@ -48,6 +48,7 @@ namespace RadioChatter.Audio
         private readonly List<RadioRole> _inFlightRoles = new List<RadioRole>(8);
         private readonly Dictionary<RadioEventType, float> _typePurgedAt = new Dictionary<RadioEventType, float>();
         private readonly List<SubtitleLine> _subtitles = new List<SubtitleLine>(MaxActiveSubtitles);
+        private readonly GroundSupportPlaybackGate _groundSupportPlaybackGate = new GroundSupportPlaybackGate();
         private readonly System.Random _noise = new System.Random();
         private readonly System.Random _ackRandom = new System.Random();
         private float _nextPendingSpeechLogTime;
@@ -234,6 +235,17 @@ namespace RadioChatter.Audio
             _subtitles.Clear();
         }
 
+        public void StopAllExcept(RadioEventType type)
+        {
+            foreach (RadioEventType candidate in System.Enum.GetValues(typeof(RadioEventType)))
+            {
+                if (candidate != type)
+                    StopTransmissions(candidate);
+            }
+
+            _pendingAcknowledgements.Clear();
+        }
+
         public void Tick()
         {
             _sidecar?.Tick();
@@ -319,6 +331,8 @@ namespace RadioChatter.Audio
             source.volume = VolumeForRole(clip.Role);
             source.clip = audioClip;
             source.Play();
+            if (clip.Type == RadioEventType.GroundSupportHail)
+                _groundSupportPlaybackGate.MarkStarted(_clock);
             TowerReadbackExpectation readbackExpectation;
             bool requiresSpokenReadback = TryGetSpokenTowerReadback(clip, out readbackExpectation);
             _activeSources.Add(new ActiveTransmission
@@ -423,6 +437,15 @@ namespace RadioChatter.Audio
         {
             for (int i = 0; i < _ready.Count; i++)
             {
+                // Ground hails may reach this queue long after their director dispatch because TTS
+                // is asynchronous. Enforce the interval here so the calls the player hears remain
+                // separated even after a slow sidecar start or an audio backlog.
+                if (_ready[i].Type == RadioEventType.GroundSupportHail &&
+                    !_groundSupportPlaybackGate.CanStart(_clock))
+                {
+                    continue;
+                }
+
                 if (!IsRoleActive(_ready[i].Role))
                     return i;
             }
@@ -834,9 +857,21 @@ namespace RadioChatter.Audio
             if (takeoffIndex >= 0)
                 return AppendCallsign(CleanRadioPhrase(text.Substring(takeoffIndex)), callsign);
 
+            int launchIndex = text.IndexOf("cleared for launch", System.StringComparison.OrdinalIgnoreCase);
+            if (launchIndex >= 0)
+                return AppendCallsign(CleanRadioPhrase(text.Substring(launchIndex)), callsign);
+
             int landingIndex = text.IndexOf("cleared to land", System.StringComparison.OrdinalIgnoreCase);
             if (landingIndex >= 0)
                 return AppendCallsign(CleanRadioPhrase(text.Substring(landingIndex)), callsign);
+
+            int recoverIndex = text.IndexOf("cleared to recover", System.StringComparison.OrdinalIgnoreCase);
+            if (recoverIndex >= 0)
+                return AppendCallsign(CleanRadioPhrase(text.Substring(recoverIndex)), callsign);
+
+            int recoveryIndex = text.IndexOf("cleared for recovery", System.StringComparison.OrdinalIgnoreCase);
+            if (recoveryIndex >= 0)
+                return AppendCallsign(CleanRadioPhrase(text.Substring(recoveryIndex)), callsign);
 
             if (TryExtractSwitchStation(text, out string station))
                 return AppendCallsign("switching " + station, callsign);

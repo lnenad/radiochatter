@@ -92,9 +92,11 @@ namespace RadioChatter.Comms
         private readonly List<BattlefieldChatterCandidate> _battlefieldChatterCandidates = new List<BattlefieldChatterCandidate>(MaxBattlefieldChatterCandidates);
         private readonly List<GroundSupportGroup> _groundSupportGroups = new List<GroundSupportGroup>(8);
         private readonly Dictionary<uint, GroundSupportGroup> _groundSupportByUnit = new Dictionary<uint, GroundSupportGroup>(32);
+        private readonly StationTransmissionHistory _stationTransmissionHistory = new StationTransmissionHistory();
 
         private int _aircraftInstanceId;
         private int _homeAirbaseInstanceId;
+        private bool _homeAirbaseIsCarrier;
         private bool? _stableGrounded;
         private int _groundedTicks;
         private int _airborneTicks;
@@ -177,9 +179,10 @@ namespace RadioChatter.Comms
             if (!snapshot.Player.Valid)
             {
                 // Aircraft changes can briefly leave the host without a local aircraft while
-                // the mission itself continues. Preserve only mission-level ground callsigns;
-                // all aircraft/radio state still resets exactly as before.
-                EndSession(true);
+                // the mission itself continues. Suspend output, but retain state keyed to the
+                // current airframe (Winchester, mission role, stable flight state). A later valid
+                // snapshot resets it only if the authoritative aircraft instance id changed.
+                SuspendForMissingPlayer();
                 return;
             }
 
@@ -225,11 +228,33 @@ namespace RadioChatter.Comms
         private void EndSession(bool preserveGroundSupport = false)
         {
             bool stopOutput = _sessionActive;
+            bool preserveLandingGreeting = preserveGroundSupport && _successfulAirportLanding;
             _sessionActive = false;
             RadioEventBus.Clear();
             ResetSession(preserveGroundSupport);
 
             if (stopOutput)
+            {
+                if (preserveLandingGreeting)
+                    _output.StopAllExcept(RadioEventType.TowerLanded);
+                else
+                    _output.StopAll();
+            }
+        }
+
+        private void SuspendForMissingPlayer()
+        {
+            bool stopOutput = _sessionActive;
+            _sessionActive = false;
+            RadioEventBus.Clear();
+            _queue.Clear();
+
+            if (!stopOutput)
+                return;
+
+            if (_successfulAirportLanding)
+                _output.StopAllExcept(RadioEventType.TowerLanded);
+            else
                 _output.StopAll();
         }
 
@@ -248,8 +273,20 @@ namespace RadioChatter.Comms
                 switch (evt.Type)
                 {
                     case RadioEventType.PlayerAircraftChanged:
-                        ResetForAircraft(evt.PlayerAircraftInstanceId);
-                        _log.LogDebug($"Player aircraft changed: {evt.SubjectName ?? "none"} #{evt.PlayerAircraftInstanceId}");
+                        if (AircraftSessionPolicy.ShouldResetFromHudEvent(
+                                _aircraftInstanceId,
+                                evt.PlayerAircraftInstanceId,
+                                snapshot.Player.AircraftInstanceId))
+                        {
+                            ResetForAircraft(evt.PlayerAircraftInstanceId);
+                            _log.LogDebug($"Player aircraft changed: {evt.SubjectName ?? "none"} #{evt.PlayerAircraftInstanceId}");
+                        }
+                        else
+                        {
+                            _log.LogDebug(
+                                $"Ignored redundant/transient HUD aircraft change: event #{evt.PlayerAircraftInstanceId}, " +
+                                $"current #{_aircraftInstanceId}, snapshot #{snapshot.Player.AircraftInstanceId}.");
+                        }
                         break;
 
                     case RadioEventType.PlayerAircraftDestroyed:
@@ -292,7 +329,9 @@ namespace RadioChatter.Comms
                         if (_config.LandingCalls.Value && !_landedAnnounced)
                         {
                             _landedAnnounced = true;
-                            Queue(RadioRole.Tower, RadioEventType.TowerLanded, "tower_landed", CommonSlots(), now, 70, 4f, 0f, false);
+                            Queue(RadioRole.Tower, RadioEventType.TowerLanded,
+                                CarrierCommsPolicy.LandedPhraseKey(IsCarrierHome(snapshot)),
+                                CommonSlots(), now, 70, 4f, 0f, false);
                         }
                         break;
 
@@ -301,8 +340,10 @@ namespace RadioChatter.Comms
                             !RequestDrivenComms())
                         {
                             _finalAnnounced = true;
-                            Queue(RadioRole.Tower, RadioEventType.TowerFinal, "tower_final",
-                                LandingClearanceSlots(snapshot, evt.Text), now, 80, 4f, 0f, false);
+                            bool carrier = IsCarrierHome(snapshot);
+                            Queue(RadioRole.Tower, RadioEventType.TowerFinal,
+                                CarrierCommsPolicy.FinalPhraseKey(carrier),
+                                LandingClearanceSlots(snapshot, evt.Text, carrier), now, 80, 4f, 0f, false);
                         }
                         break;
 
@@ -945,18 +986,18 @@ namespace RadioChatter.Comms
 
         private bool IsNormalAirportExitEjection(Snapshot snapshot)
         {
-            if (snapshot.Player.Destroyed)
-                return false;
+            bool nearAirbase = false;
+            if (!_successfulAirportLanding && !snapshot.Player.Destroyed && snapshot.Player.Grounded &&
+                TryGetHomeBase(snapshot, out AirbaseInfo home, out float distanceM))
+            {
+                nearAirbase = IsNearAirbase(home, distanceM);
+            }
 
-            bool safelyOnGround = snapshot.Player.Grounded ||
-                                  (_successfulAirportLanding && snapshot.Player.AltitudeAglM < 5f && snapshot.Player.SpeedMs < 45f);
-            if (!safelyOnGround)
-                return false;
-
-            if (!TryGetHomeBase(snapshot, out AirbaseInfo home, out float distanceM))
-                return false;
-
-            return IsNearAirbase(home, distanceM);
+            return FlightExitPolicy.IsNormalAirportExit(
+                _successfulAirportLanding,
+                snapshot.Player.Destroyed,
+                snapshot.Player.Grounded,
+                nearAirbase);
         }
 
         private bool DetectPlayerDestroyed(Snapshot snapshot)
@@ -1512,14 +1553,17 @@ namespace RadioChatter.Comms
                     else
                         ParkQueuedStartupAwacs();
 
-                    Queue(RadioRole.Tower, RadioEventType.TowerTakeoff, "tower_takeoff",
+                    Queue(RadioRole.Tower, RadioEventType.TowerTakeoff,
+                        CarrierCommsPolicy.TakeoffPhraseKey(home.IsCarrier),
                         TowerSlots(home), snapshot.Time, 70, 4f, 0f, false);
                 }
 
                 if (wasAirborne && nearBase && _config.LandingCalls.Value && !_landedAnnounced)
                 {
                     _landedAnnounced = true;
-                    Queue(RadioRole.Tower, RadioEventType.TowerLanded, "tower_landed", CommonSlots(), snapshot.Time, 70, 4f, 0f, false);
+                    Queue(RadioRole.Tower, RadioEventType.TowerLanded,
+                        CarrierCommsPolicy.LandedPhraseKey(home.IsCarrier),
+                        CommonSlots(), snapshot.Time, 70, 4f, 0f, false);
                 }
             }
             else if (_stableGrounded != false && _airborneTicks >= StableTicksRequired)
@@ -1536,7 +1580,9 @@ namespace RadioChatter.Comms
                 {
                     _airborneAnnounced = true;
                     _awaitingAwacsCheckIn = _config.VoiceCommandsEnabled.Value;
-                    Queue(RadioRole.Tower, RadioEventType.TowerAirborne, "tower_airborne", CommonSlots(), snapshot.Time, 70, 4f, 0f, false);
+                    Queue(RadioRole.Tower, RadioEventType.TowerAirborne,
+                        CarrierCommsPolicy.AirbornePhraseKey(home.IsCarrier),
+                        CommonSlots(), snapshot.Time, 70, 4f, 0f, false);
                 }
             }
         }
@@ -1588,7 +1634,9 @@ namespace RadioChatter.Comms
             if (!_approachAnnounced && distanceM < ApproachCallDistanceM && inboundLongEnough && !RequestDrivenComms())
             {
                 _approachAnnounced = true;
-                Queue(RadioRole.Tower, RadioEventType.TowerApproach, "tower_approach", CommonSlots(), snapshot.Time, 70, 4f, 20f, false);
+                Queue(RadioRole.Tower, RadioEventType.TowerApproach,
+                    CarrierCommsPolicy.ApproachPhraseKey(home.IsCarrier),
+                    CommonSlots(), snapshot.Time, 70, 4f, 20f, false);
             }
         }
 
@@ -1613,6 +1661,9 @@ namespace RadioChatter.Comms
             // Forced/player-requested contact calls use BypassStartupHold and are preserved.
             _queue.RemoveAll(item => IsContactInfoCall(item.Type) && !item.BypassStartupHold);
             _startupAwacsTransmissions.RemoveAll(item => IsContactInfoCall(item.Type));
+            // New-contact calls are always unsolicited. Purge any request already handed to the
+            // asynchronous audio layer so it cannot surface after Winchester or radio quiet.
+            _output.StopTransmissions(RadioEventType.NewContact);
             if (_awacsTrafficMode == AwacsTrafficMode.Winchester)
                 StopGroundSupportHails();
             _previousRtbHomeDistance = float.NaN;
@@ -1826,6 +1877,9 @@ namespace RadioChatter.Comms
                     else
                         QueueVoiceResponse(RadioRole.Awacs, RadioEventType.VoiceCommandResponse, "radio_check_awacs", VoiceSlots(callsign), now);
                     break;
+                case VoiceIntentKind.RequestRepeatLast:
+                    RespondRepeatLast(intent.Station, now, callsign);
+                    break;
                 default:
                     if (intent.Station == VoiceStation.Tower)
                         QueueVoiceResponse(RadioRole.Tower, RadioEventType.VoiceCommandResponse, "say_again_tower", VoiceSlots(callsign), now);
@@ -1833,6 +1887,28 @@ namespace RadioChatter.Comms
                         QueueVoiceResponse(RadioRole.Awacs, RadioEventType.VoiceCommandResponse, "say_again_awacs", VoiceSlots(callsign), now);
                     break;
             }
+        }
+
+        private void RespondRepeatLast(VoiceStation requestedStation, float now, string callsign)
+        {
+            VoiceStation station = requestedStation == VoiceStation.Tower
+                ? VoiceStation.Tower
+                : VoiceStation.Awacs;
+            RadioRole role = station == VoiceStation.Tower ? RadioRole.Tower : RadioRole.Awacs;
+
+            if (_stationTransmissionHistory.TryGet(station, out string previousText))
+            {
+                QueueText(role, RadioEventType.VoiceCommandResponse, previousText,
+                    now, VoiceResponsePriority, 4f, 0f, false,
+                    duplicateWindowSeconds: 0f,
+                    bypassStartupHold: true);
+                _log.LogInfo($"{station} repeating last transmission for {callsign}: {previousText}");
+                return;
+            }
+
+            QueueVoiceResponse(role, RadioEventType.VoiceCommandResponse,
+                station == VoiceStation.Tower ? "tower_nothing_to_repeat" : "awacs_nothing_to_repeat",
+                VoiceSlots(callsign), now);
         }
 
         private void RespondMissionRoleCheckIn(
@@ -1948,6 +2024,7 @@ namespace RadioChatter.Comms
                 case FlightMissionRole.Cap: return "combat air patrol";
                 case FlightMissionRole.Cas: return "close air support";
                 case FlightMissionRole.Strike: return "strike";
+                case FlightMissionRole.MaritimeStrike: return "maritime strike, anti-surface warfare";
                 case FlightMissionRole.SearchAndDestroy: return "search and destroy";
                 default: return "general mission";
             }
@@ -2138,6 +2215,11 @@ namespace RadioChatter.Comms
             if (!SpokenTowerReadbacksEnabled() || _pendingTowerReadbacks.Count == 0)
                 return false;
 
+            // "Say again" asks Tower to repeat the instruction; it is not an attempted readback
+            // and must not consume one of the player's allowed attempts.
+            if (intent.Kind == VoiceIntentKind.RequestRepeatLast)
+                return false;
+
             for (int i = 0; i < _pendingTowerReadbacks.Count; i++)
             {
                 TowerReadbackExpectation expectation = _pendingTowerReadbacks[i].Expectation;
@@ -2196,11 +2278,24 @@ namespace RadioChatter.Comms
             if (!SpokenTowerReadbacksEnabled())
                 return;
 
+            bool towerBusy = HasQueuedTransmission(RadioRole.Tower) ||
+                             _output.HasAudioWork(RadioRole.Tower);
             for (int i = _pendingTowerReadbacks.Count - 1; i >= 0; i--)
             {
                 PendingTowerReadback pending = _pendingTowerReadbacks[i];
-                if (now - pending.AwaitingSince < TowerReadbackResponseSeconds)
+                pending.AwaitingSince = TowerReadbackTiming.RefreshAwaitingSince(
+                    pending.AwaitingSince, now, towerBusy);
+                if (towerBusy)
+                {
+                    _pendingTowerReadbacks[i] = pending;
                     continue;
+                }
+
+                if (!TowerReadbackTiming.HasTimedOut(
+                        pending.AwaitingSince, now, TowerReadbackResponseSeconds))
+                {
+                    continue;
+                }
 
                 HandleFailedTowerReadback(i, now, false, null);
             }
@@ -2336,7 +2431,8 @@ namespace RadioChatter.Comms
 
                 Dictionary<string, string> slots = TowerSlots(home);
                 slots["callsign"] = callsign;
-                QueueVoiceResponse(RadioRole.Tower, RadioEventType.TowerTakeoff, "tower_takeoff", slots, now);
+                QueueVoiceResponse(RadioRole.Tower, RadioEventType.TowerTakeoff,
+                    CarrierCommsPolicy.TakeoffPhraseKey(home.IsCarrier), slots, now);
             }
             else
             {
@@ -2354,13 +2450,15 @@ namespace RadioChatter.Comms
                     _approachAnnounced = true;
                     Dictionary<string, string> slots = TowerSlots(home);
                     slots["callsign"] = callsign;
-                    QueueVoiceResponse(RadioRole.Tower, RadioEventType.TowerFinal, "tower_final", slots, now);
+                    QueueVoiceResponse(RadioRole.Tower, RadioEventType.TowerFinal,
+                        CarrierCommsPolicy.FinalPhraseKey(home.IsCarrier), slots, now);
                 }
                 else
                 {
                     Dictionary<string, string> slots = VoiceSlots(callsign);
                     slots["range"] = RadioText.FormatRange(distanceM, snapshot.Units);
-                    QueueVoiceResponse(RadioRole.Tower, RadioEventType.VoiceCommandResponse, "tower_continue_inbound", slots, now);
+                    QueueVoiceResponse(RadioRole.Tower, RadioEventType.VoiceCommandResponse,
+                        CarrierCommsPolicy.ContinueInboundPhraseKey(home.IsCarrier), slots, now);
                 }
             }
             else
@@ -2901,6 +2999,10 @@ namespace RadioChatter.Comms
                 _queue.RemoveAt(bestIndex);
                 _log.LogInfo($"[{transmission.Role}] {transmission.Text}");
                 _output.Transmit(transmission.Role, transmission.Type, transmission.Text, transmission.DisplaySeconds);
+                if (transmission.Role == RadioRole.Tower)
+                    _stationTransmissionHistory.Record(VoiceStation.Tower, transmission.Text);
+                else if (transmission.Role == RadioRole.Awacs)
+                    _stationTransmissionHistory.Record(VoiceStation.Awacs, transmission.Text);
                 if (transmission.Type == RadioEventType.GroundSupportHail)
                     StartGroundSupportHailCooldown(now);
                 transmitted++;
@@ -2925,8 +3027,11 @@ namespace RadioChatter.Comms
             return slots;
         }
 
-        private Dictionary<string, string> LandingClearanceSlots(Snapshot snapshot, string sourceText)
+        private Dictionary<string, string> LandingClearanceSlots(Snapshot snapshot, string sourceText, bool carrier)
         {
+            if (carrier)
+                return CommonSlots();
+
             string runwayName = RadioText.ExtractRunwayName(sourceText);
             if (!string.IsNullOrEmpty(runwayName))
             {
@@ -2996,6 +3101,7 @@ namespace RadioChatter.Comms
 
                     home = candidate;
                     distanceM = GPos.Distance2D(snapshot.Player.Position, candidate.Position);
+                    _homeAirbaseIsCarrier = candidate.IsCarrier;
                     return true;
                 }
             }
@@ -3014,10 +3120,22 @@ namespace RadioChatter.Comms
             if (!float.IsPositiveInfinity(distanceM))
             {
                 _homeAirbaseInstanceId = home.InstanceId;
+                _homeAirbaseIsCarrier = home.IsCarrier;
                 return true;
             }
 
             return false;
+        }
+
+        private bool IsCarrierHome(Snapshot snapshot)
+        {
+            if (TryGetHomeBase(snapshot, out AirbaseInfo home, out float ignoredDistance))
+                return home.IsCarrier;
+
+            // Successful-sortie and exit events can arrive after the local-aircraft snapshot has
+            // disappeared. Preserve the last confirmed home type so the welcome call still uses
+            // carrier phraseology.
+            return _homeAirbaseIsCarrier;
         }
 
         private static bool IsNearAirbase(AirbaseInfo home, float distanceM)
@@ -3055,6 +3173,7 @@ namespace RadioChatter.Comms
         {
             _aircraftInstanceId = aircraftInstanceId;
             _homeAirbaseInstanceId = 0;
+            _homeAirbaseIsCarrier = false;
             _stableGrounded = null;
             _groundedTicks = 0;
             _airborneTicks = 0;
@@ -3081,6 +3200,7 @@ namespace RadioChatter.Comms
             _startupAwacsTransmissions.Clear();
             _pendingTowerReadbacks.Clear();
             ClearTowerReadbackPrompts();
+            _stationTransmissionHistory.Clear();
             _previousHomeDistance = float.NaN;
             _approachInboundStartedAt = float.NaN;
             _approachLastInboundAt = float.NaN;

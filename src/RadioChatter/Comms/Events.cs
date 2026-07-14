@@ -85,6 +85,8 @@ namespace RadioChatter.Comms
         void ShowAwacsCheckInPrompt(string awacsCallsign, string playerCallsign);
         /// <summary>Clears the AWACS check-in prompt after check-in, landing, or reset.</summary>
         void ClearAwacsCheckInPrompt();
+        /// <summary>Stops every playing/pending transmission except one event type.</summary>
+        void StopAllExcept(RadioEventType type);
         void StopAll();
     }
 

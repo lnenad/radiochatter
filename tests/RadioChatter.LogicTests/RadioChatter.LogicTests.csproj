@@ -9,5 +9,9 @@
   <ItemGroup>
     <Compile Include="..\..\src\RadioChatter\Comms\VoiceIntentParser.cs" Link="VoiceIntentParser.cs" />
     <Compile Include="..\..\src\RadioChatter\Comms\GroundSupportThreatTracker.cs" Link="GroundSupportThreatTracker.cs" />
+    <Compile Include="..\..\src\RadioChatter\Comms\AircraftSessionPolicy.cs" Link="AircraftSessionPolicy.cs" />
+    <Compile Include="..\..\src\RadioChatter\Comms\TowerReadbackMatcher.cs" Link="TowerReadbackMatcher.cs" />
+    <Compile Include="..\..\src\RadioChatter\Comms\StationTransmissionHistory.cs" Link="StationTransmissionHistory.cs" />
+    <Compile Include="..\..\src\RadioChatter\Comms\CarrierCommsPolicy.cs" Link="CarrierCommsPolicy.cs" />
   </ItemGroup>
 </Project>

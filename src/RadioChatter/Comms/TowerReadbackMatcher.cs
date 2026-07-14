@@ -18,6 +18,22 @@ namespace RadioChatter.Comms
         public string HandoffStation;
     }
 
+    internal static class TowerReadbackTiming
+    {
+        /// <summary>The player's response window begins after Tower finishes speaking. Refreshing
+        /// while correction audio is queued, synthesizing, or playing prevents that audio from
+        /// consuming the retry timeout.</summary>
+        public static float RefreshAwaitingSince(float awaitingSince, float now, bool towerBusy)
+        {
+            return towerBusy ? now : awaitingSince;
+        }
+
+        public static bool HasTimedOut(float awaitingSince, float now, float responseSeconds)
+        {
+            return now - awaitingSince >= responseSeconds;
+        }
+    }
+
     /// <summary>Builds and validates the critical parts of a Tower readback. Radio readbacks do
     /// not normally re-address Tower, so this is intentionally separate from proper-call parsing.</summary>
     internal static class TowerReadbackMatcher
@@ -106,9 +122,9 @@ namespace RadioChatter.Comms
             switch (expectation.Kind)
             {
                 case TowerReadbackKind.Takeoff:
-                    return HasAnyWord(normalized, "takeoff", "take off", "departure", "runway", "cleared", "clear");
+                    return HasAnyWord(normalized, "takeoff", "take off", "departure", "launch", "deck", "runway", "cleared", "clear");
                 case TowerReadbackKind.Landing:
-                    return HasAnyWord(normalized, "land", "landing", "runway", "cleared", "clear", "full stop");
+                    return HasAnyWord(normalized, "land", "landing", "recover", "recovery", "deck", "runway", "cleared", "clear", "full stop");
                 case TowerReadbackKind.Handoff:
                     return HasAnyWord(normalized, "switch", "switching", "contact", "contacting", "button") ||
                            ContainsFolded(normalized, expectation.HandoffStation);
@@ -119,12 +135,12 @@ namespace RadioChatter.Comms
 
         private static bool HasTakeoffInstruction(string normalized)
         {
-            return HasAnyWord(normalized, "clear", "cleared") && HasAnyWord(normalized, "takeoff", "take off");
+            return HasAnyWord(normalized, "clear", "cleared") && HasAnyWord(normalized, "takeoff", "take off", "launch");
         }
 
         private static bool HasLandingInstruction(string normalized)
         {
-            return HasAnyWord(normalized, "clear", "cleared") && HasAnyWord(normalized, "land", "landing");
+            return HasAnyWord(normalized, "clear", "cleared") && HasAnyWord(normalized, "land", "landing", "recover", "recovery");
         }
 
         private static bool HasExpectedRunway(string normalized, string expectedRunway)

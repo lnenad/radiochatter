@@ -19,6 +19,26 @@
     "{callsign}, welcome home, taxi to ramp",
     "{callsign}, tower, welcome home"
   ],
+  "carrier_launch": [
+    "{callsign}, deck control, cleared for launch",
+    "{callsign}, carrier, deck is clear, cleared for launch"
+  ],
+  "carrier_airborne": [
+    "{callsign}, departure, airborne, contact {awacs} on button two",
+    "{callsign}, carrier departure, radar contact, switch {awacs}"
+  ],
+  "carrier_approach": [
+    "{callsign}, carrier control, continue inbound for recovery, report initial",
+    "{callsign}, carrier, proceed inbound, report ready for recovery"
+  ],
+  "carrier_recovery": [
+    "{callsign}, carrier, deck is clear, cleared for recovery",
+    "{callsign}, carrier control, cleared to recover"
+  ],
+  "carrier_landed": [
+    "{callsign}, welcome aboard, taxi clear of the landing area",
+    "{callsign}, carrier, welcome aboard, clear the deck"
+  ],
   "awacs_new_contact": [
     "{callsign}, {awacs}, new contact{bearing_clause}, range {range}{altitude_clause}, {aspect}"
   ],
@@ -54,9 +74,19 @@
     "{callsign}, tower, unable",
     "{callsign}, negative, unable at this time"
   ],
+  "tower_nothing_to_repeat": [
+    "{callsign}, tower, no previous transmission to repeat"
+  ],
+  "awacs_nothing_to_repeat": [
+    "{callsign}, {awacs}, no previous transmission to repeat"
+  ],
   "tower_continue_inbound": [
     "{callsign}, tower, you are {range} out, continue inbound, report approach",
     "{callsign}, tower, continue inbound, {range} to the field"
+  ],
+  "carrier_continue_inbound": [
+    "{callsign}, carrier control, continue inbound for recovery, {range} to the carrier",
+    "{callsign}, carrier, continue inbound, report initial"
   ],
   "tower_readback_incorrect": [
     "{callsign}, tower, readback incorrect, say again",

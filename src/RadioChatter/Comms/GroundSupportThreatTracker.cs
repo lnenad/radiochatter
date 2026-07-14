@@ -45,4 +45,22 @@ namespace RadioChatter.Comms
         }
 
     }
+
+    /// <summary>Enforces the ground-support interval at the point where audio actually starts.
+    /// Director dispatch times can precede playback while TTS is loading or another clip owns the
+    /// audio lane, so they cannot by themselves guarantee player-heard spacing.</summary>
+    internal sealed class GroundSupportPlaybackGate
+    {
+        private float _nextAllowedAt = float.NegativeInfinity;
+
+        public bool CanStart(float now)
+        {
+            return now >= _nextAllowedAt;
+        }
+
+        public void MarkStarted(float now)
+        {
+            _nextAllowedAt = GroundSupportHailGate.NextAllowedAt(now);
+        }
+    }
 }

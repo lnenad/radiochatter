@@ -75,6 +75,7 @@ namespace RadioChatter.Game
         public string Name;
         public GPos Position;
         public float RadiusM;
+        public bool IsCarrier;           // attached/mobile airbase or carrier-style runway equipment
         public float RunwayHeadingDeg;   // NaN when no runway data
         public string RunwayName;        // e.g. "09", may be null
     }

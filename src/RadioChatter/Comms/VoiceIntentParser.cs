@@ -10,6 +10,7 @@ namespace RadioChatter.Comms
         Cas,
         Sead,
         Strike,
+        MaritimeStrike,
         SearchAndDestroy
     }
 
@@ -20,6 +21,7 @@ namespace RadioChatter.Comms
             return role == FlightMissionRole.Cap ||
                    role == FlightMissionRole.Sead ||
                    role == FlightMissionRole.Strike ||
+                   role == FlightMissionRole.MaritimeStrike ||
                    role == FlightMissionRole.SearchAndDestroy;
         }
 
@@ -46,7 +48,8 @@ namespace RadioChatter.Comms
         RequestAwacsResume,
         SetMissionRole,
         CheckIn,
-        RadioCheck
+        RadioCheck,
+        RequestRepeatLast
     }
 
     internal enum VoiceStation
@@ -87,8 +90,8 @@ namespace RadioChatter.Comms
         {
             "request", "requesting", "requests", "ready", "cleared", "clearance",
             "radio", "comm", "comms", "mic", "how", "check", "checking",
-            "takeoff", "take", "taxi", "departure",
-            "land", "landing", "inbound", "approach", "full", "downwind", "overhead", "airborne",
+            "takeoff", "take", "taxi", "departure", "launch",
+            "land", "landing", "inbound", "approach", "full", "downwind", "overhead", "airborne", "recover", "recovery",
             "return", "returning", "rtb", "home", "base",
             "vector", "bearing", "steer", "heading", "intercept", "target", "bandit",
             "objective", "objectives", "list", "tasking", "status", "current", "active", "available", "all",
@@ -98,7 +101,9 @@ namespace RadioChatter.Comms
             "call", "calls", "callout", "callouts", "traffic",
             "winchester", "weapons", "ordnance", "ordinance", "dry",
             "mission", "role", "tasked", "tasking", "as", "fragged", "cap", "cas", "sead", "seed",
-            "strike", "search", "destroy", "general", "multirole", "multi",
+            "strike", "interdiction", "bomb", "bombing", "bomber", "ground",
+            "maritime", "naval", "anti", "ship", "shipping", "surface", "warfare", "countersea", "war",
+            "search", "destroy", "general", "multirole", "multi",
             "say", "need", "want", "give", "what", "on", "for", "with", "at", "to"
         };
 
@@ -158,16 +163,17 @@ namespace RadioChatter.Comms
         }
 
         /// <summary>Station address at the very start of the utterance: "tower ...",
-        /// "awacs ...", or the configured AWACS callsign. Returns the token index after it.</summary>
+        /// "deck ...", "carrier ...", "awacs ...", or the configured AWACS callsign. Returns
+        /// the token index after it.</summary>
         private static VoiceStation DetectLeadingStation(string[] tokens, string awacsCallsign, out int nextIndex)
         {
             nextIndex = 0;
             if (tokens.Length == 0)
                 return VoiceStation.Unspecified;
 
-            if (tokens[0] == "tower")
+            if (tokens[0] == "tower" || tokens[0] == "deck" || tokens[0] == "carrier")
             {
-                nextIndex = 1;
+                nextIndex = tokens.Length > 1 && tokens[1] == "control" ? 2 : 1;
                 return VoiceStation.Tower;
             }
 
@@ -470,6 +476,14 @@ namespace RadioChatter.Comms
                 return VoiceIntentKind.RequestAwacsQuiet;
             }
 
+            if (HasAny(text,
+                "say again", "say that again", "please repeat", "repeat please",
+                "repeat your last", "repeat last", "repeat that", "repeat transmission",
+                "come again", "repeat"))
+            {
+                return VoiceIntentKind.RequestRepeatLast;
+            }
+
             if (HasAny(text, "radio check", "comm check", "comms check", "mic check", "how do you read"))
                 return VoiceIntentKind.RadioCheck;
 
@@ -497,10 +511,10 @@ namespace RadioChatter.Comms
                 return wantsList ? VoiceIntentKind.RequestObjectiveList : VoiceIntentKind.RequestVectorObjective;
             }
 
-            if (HasAny(text, "takeoff", "take off", "departure", "ready to taxi", "request taxi"))
+            if (HasAny(text, "takeoff", "take off", "departure", "ready to taxi", "request taxi", "launch"))
                 return VoiceIntentKind.RequestTakeoff;
 
-            if (HasAny(text, "landing", "land", "inbound", "approach", "full stop", "downwind", "overhead"))
+            if (HasAny(text, "landing", "land", "inbound", "approach", "full stop", "downwind", "overhead", "recover", "recovery"))
                 return VoiceIntentKind.RequestLanding;
 
             if (wantsVector || HasAny(text, "target", "bandit", "cut off"))
@@ -547,13 +561,24 @@ namespace RadioChatter.Comms
                 return true;
             }
 
+            if (HasAny(text,
+                "maritime strike", "naval strike", "ship strike", "shipping strike",
+                "anti ship", "anti shipping", "anti surface warfare", "asuw", "a s u w",
+                "war at sea", "countersea", "counter sea", "ship attack", "attack ships"))
+            {
+                role = FlightMissionRole.MaritimeStrike;
+                return true;
+            }
+
             if (HasAny(text, "search and destroy", "search destroy", "seek and destroy"))
             {
                 role = FlightMissionRole.SearchAndDestroy;
                 return true;
             }
 
-            if (HasAny(text, "strike", "interdiction"))
+            if (HasAny(text,
+                "strike", "interdiction", "air interdiction", "bomb", "bombing", "bomber",
+                "bomb strike", "ground strike"))
             {
                 role = FlightMissionRole.Strike;
                 return true;
@@ -565,6 +590,12 @@ namespace RadioChatter.Comms
         private static VoiceStation DetectStation(string text, string awacsCallsign)
         {
             int towerIndex = IndexOfWord(text, "tower");
+            int deckIndex = IndexOfWord(text, "deck");
+            int carrierIndex = IndexOfWord(text, "carrier");
+            if (deckIndex >= 0 && (towerIndex < 0 || deckIndex < towerIndex))
+                towerIndex = deckIndex;
+            if (carrierIndex >= 0 && (towerIndex < 0 || carrierIndex < towerIndex))
+                towerIndex = carrierIndex;
             int awacsIndex = awacsCallsign.Length > 0 ? IndexOfWord(text, awacsCallsign) : -1;
             if (awacsIndex < 0)
                 awacsIndex = IndexOfWord(text, "awacs");
