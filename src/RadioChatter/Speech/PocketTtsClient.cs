@@ -71,8 +71,12 @@ namespace RadioChatter.Speech
             request.Method = "POST";
             request.ContentType = "application/json";
             request.Accept = "audio/wav";
-            request.Timeout = 4000;
-            request.ReadWriteTimeout = 4000;
+            // The sidecar generates one line at a time (~1.5s each) and queues
+            // overlapping requests FIFO, so the timeout must cover a full burst of
+            // MaxPendingSpeech lines, not just one generation. Requests that would
+            // outlive the shortest clip lifetime (10s) are not worth waiting for.
+            request.Timeout = 6000;
+            request.ReadWriteTimeout = 6000;
             request.ContentLength = payload.Length;
 
             using (Stream stream = request.GetRequestStream())

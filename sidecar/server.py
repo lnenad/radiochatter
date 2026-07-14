@@ -9,6 +9,9 @@ HTTP contract:
   POST /speak  -> WAV bytes, JSON body {"text":"...", "voice":"awacs"}; 503 while not ready
   POST /transcribe -> {"text":"..."}, JSON body {"audio_b64":"<base64 WAV>", "prompt":"..."};
                   503 while the STT model is loading/failed/disabled
+
+Concurrent /speak (and /transcribe) requests are accepted but executed one at a
+time on persistent worker threads; overlapping requests queue FIFO.
 """
 
 from __future__ import annotations
@@ -22,6 +25,7 @@ import sys
 import threading
 import time
 import wave
+from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Dict, Tuple
@@ -106,6 +110,68 @@ STATE = EngineState()
 # poison sys.modules, so all heavy engine imports are serialized through this lock.
 IMPORT_LOCK = threading.Lock()
 
+# PyTorch's native libraries (MKL fast memory manager, Intel OpenMP, oneDNN) keep
+# per-thread caches that are never released when the owning OS thread exits. Any
+# torch work executed on a short-lived thread therefore leaks a few MB of native
+# memory per thread — invisible to gc/tracemalloc, unrecoverable by _heapmin().
+# Pocket TTS spawns two fresh threads inside every generate_audio() call, and
+# ThreadingHTTPServer runs each request handler (which drives the rest of the
+# generation) on its own throwaway thread, so a long game session grew by roughly
+# 3-10 MB per synthesized line (see plan/PocketTtsMemoryInvestigation.md).
+# The fix is thread reuse: all torch work runs on the small persistent pools below.
+#
+# One worker per model also serializes generation, which Pocket TTS requires anyway
+# (generate_audio is documented as not thread-safe); overlapping HTTP requests now
+# queue FIFO instead of corrupting each other.
+TTS_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="tts-serial")
+STT_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="stt-serial")
+
+# Pocket TTS internally starts a decoder thread and a generation thread per call
+# (pocket_tts/models/tts_model.py). With /speak serialized above, at most two run
+# concurrently; a third worker absorbs the brief overlap while the previous call's
+# generation thread finishes its final log line.
+_POCKET_TTS_INTERNAL_POOL = ThreadPoolExecutor(max_workers=3, thread_name_prefix="tts-internal")
+
+
+class _PooledThread:
+    """threading.Thread stand-in that runs the target on a persistent pool worker."""
+
+    def __init__(self, group=None, target=None, name=None, args=(), kwargs=None, *, daemon=None):
+        self._target = target
+        self._args = args
+        self._kwargs = kwargs or {}
+        self._future = None
+
+    def start(self):
+        self._future = _POCKET_TTS_INTERNAL_POOL.submit(self._target, *self._args, **self._kwargs)
+
+    def join(self, timeout=None):
+        if self._future is None:
+            return
+        try:
+            self._future.result(timeout)
+        except Exception as exc:  # Thread.join never raises; report like the default excepthook
+            _log(f"Pocket TTS worker thread failed: {type(exc).__name__}: {exc}")
+
+    def is_alive(self):
+        return self._future is not None and not self._future.done()
+
+
+class _ThreadingProxy:
+    """Forwards to the real threading module but hands out pooled threads."""
+
+    Thread = _PooledThread
+
+    def __getattr__(self, name):
+        return getattr(threading, name)
+
+
+def _patch_pocket_tts_threading() -> None:
+    """Make Pocket TTS run its per-call worker threads on the persistent pool."""
+    from pocket_tts.models import tts_model
+
+    tts_model.threading = _ThreadingProxy()
+
 
 class SttState:
     """Shared speech-to-text load status, independent of the TTS engine."""
@@ -151,6 +217,8 @@ class PocketTtsEngine:
         try:
             with IMPORT_LOCK:
                 from pocket_tts import TTSModel
+
+                _patch_pocket_tts_threading()
         except Exception as exc:  # pragma: no cover - startup diagnostics
             raise RuntimeError(
                 "pocket-tts is not installed. Install with: python -m pip install -r requirements.txt"
@@ -306,7 +374,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(400, {"error": "text is required"})
                 return
 
-            _, wav_bytes = engine.speak(text, voice)
+            # Run on the persistent TTS worker: torch on this throwaway handler
+            # thread would leak native per-thread caches, and the single worker
+            # serializes generation (Pocket TTS is not thread-safe).
+            _, wav_bytes = TTS_EXECUTOR.submit(engine.speak, text, voice).result()
             self.send_response(200)
             self.send_header("Content-Type", "audio/wav")
             self.send_header("Content-Length", str(len(wav_bytes)))
@@ -333,7 +404,9 @@ class Handler(BaseHTTPRequestHandler):
 
             wav_bytes = base64.b64decode(audio_b64)
             started = time.monotonic()
-            text = engine.transcribe(wav_bytes, prompt)
+            # Same reasoning as /speak: keep native inference off throwaway
+            # handler threads and serialize it on one persistent worker.
+            text = STT_EXECUTOR.submit(engine.transcribe, wav_bytes, prompt).result()
             _log(f"Transcribed {len(wav_bytes)} bytes in {time.monotonic() - started:.2f}s: {text!r}")
             self._json(200, {"text": text})
         except Exception as exc:
