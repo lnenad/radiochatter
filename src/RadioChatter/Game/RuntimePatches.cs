@@ -18,9 +18,8 @@ namespace RadioChatter.Game
     [HarmonyPatch(typeof(global::FlightHud), "SetAircraft")]
     internal static class FlightHudSetAircraftPatch
     {
-        private static void Postfix(global::FlightHud __instance, global::Aircraft aircraft)
+        private static void Postfix(global::Aircraft aircraft)
         {
-            WeaponPatchHelpers.CacheHud(__instance);
             RadioEventBus.Enqueue(new RadioEvent
             {
                 Type = RadioEventType.PlayerAircraftChanged,
