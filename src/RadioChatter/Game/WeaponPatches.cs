@@ -219,18 +219,9 @@ namespace RadioChatter.Game
             }
         }
 
-        // This runs inside weapon-fire/kill/damage hooks, so the FlightHud lookup and the
-        // reflected field must both be cached: FindObjectOfType per shot is a measurable
-        // per-frame cost in combat. The hud reference is seeded by FlightHud.SetAircraft
-        // and only re-discovered (at most once per frame) after Unity destroys it.
+        // These hooks can run for every shot. Use the game's scene-owned HUD reference
+        // instead of searching the scene or maintaining a second lifecycle cache.
         private static readonly FieldInfo HudAircraftField = AccessTools.Field(typeof(global::FlightHud), "aircraft");
-        private static global::FlightHud _cachedHud;
-        private static int _lastHudSearchFrame = -1;
-
-        public static void CacheHud(global::FlightHud hud)
-        {
-            _cachedHud = hud;
-        }
 
         private static bool IsCurrentHudAircraft(global::Aircraft aircraft)
         {
@@ -239,15 +230,11 @@ namespace RadioChatter.Game
 
             try
             {
-                global::FlightHud hud = _cachedHud;
-                if (hud == null && Time.frameCount != _lastHudSearchFrame)
-                {
-                    _lastHudSearchFrame = Time.frameCount;
-                    hud = UnityEngine.Object.FindObjectOfType<global::FlightHud>();
-                    _cachedHud = hud;
-                }
-
-                if (hud == null || HudAircraftField == null)
+                global::FlightHud hud = global::FlightHud.i;
+                // Preserve the active-object filtering of FindObjectOfType, including
+                // Unity's destroyed-object null check during scene transitions.
+                if (hud == null || !hud.gameObject.activeInHierarchy ||
+                    (hud.hideFlags & HideFlags.DontSave) != 0 || HudAircraftField == null)
                     return false;
 
                 global::Aircraft hudAircraft = HudAircraftField.GetValue(hud) as global::Aircraft;
